@@ -4,9 +4,7 @@ import json
 from pathlib import Path
 
 
-def read_events(
-    file_path: Path, offset: int = 0, limit: int = 100
-) -> tuple[list[dict], int]:
+def read_events(file_path: Path, offset: int = 0, limit: int = 100) -> tuple[list[dict], int]:
     """
     Read events from JSONL file with pagination.
 

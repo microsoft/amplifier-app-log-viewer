@@ -33,6 +33,7 @@ Opens at `http://localhost:8180` by default.
 ## Features
 
 - **Real-time log streaming** - See events as Amplifier writes them
+- **Auto-refresh** - Automatically detects new projects and sessions (10-second cache)
 - **Interactive JSON viewer** - Collapsible/expandable with smart defaults
 - **Smart filtering** - Dynamic event types, log levels, text search
 - **Session hierarchy** - Parent and sub-agent session navigation
@@ -56,9 +57,69 @@ Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
 - `transcript.jsonl` - Conversation messages
 - `metadata.json` - Session metadata
 
+## Auto-Refresh Behavior
+
+The viewer automatically detects new projects and sessions without requiring server restart:
+
+- **3-second server cache** - Server rescans when cache expires and API is called
+- **Auto-refresh on dropdown open** - Opening (clicking) any dropdown triggers refresh
+- **Smart updates** - Only updates DOM if data actually changed (no flicker)
+- **Preserves selection** - Current selection maintained if it still exists
+- **Manual refresh button** - Click the ↻ button to force immediate rescan + reload all dropdowns
+- **Browser cache disabled** - API responses include no-cache headers
+
+**How it works:**
+1. Server maintains 3-second cache of project/session tree
+2. When you **open (focus) a dropdown**, browser fetches fresh data
+3. If server cache >3 seconds old, server rescans `~/.amplifier/projects/` directory
+4. Browser compares new data with current, only updates if changed
+5. Your current selection is preserved if it still exists
+
+**Common workflow:**
+1. Viewing a session in project "foo"
+2. Create new session in another terminal
+3. Click to open the **session dropdown** → Auto-refreshes, shows new session ✓
+
+**Debugging output** (in server console):
+```
+[Refresh] Scanned projects directory: 2 projects, 5 sessions
+[Auto-refresh] Cache expired (4.2s > 3s), rescanning...
+```
+
+**Manual refresh via API**:
+```bash
+curl -X POST http://localhost:8180/api/refresh
+```
+
 ## Troubleshooting
 
 **"No sessions found"**: Run Amplifier at least once to create session logs at `~/.amplifier/projects/`
+
+**New sessions not appearing**:
+1. **Click to open the session dropdown** (triggers auto-refresh)
+2. Wait >3 seconds for server cache to expire (if you just opened it)
+3. Or click the ↻ refresh button (forces immediate refresh + reloads all dropdowns)
+4. Watch server console for `[Refresh]` or `[Auto-refresh]` output to confirm rescan happened
+
+**Refresh button not working**:
+- Check browser console (F12) for errors
+- Verify server console shows `[Refresh] Scanned...` output
+- Make sure you're running the local version: `uv run amplifier-log-viewer`
+
+**Changes not working after editing code**:
+```bash
+cd amplifier-app-log-viewer
+uv run amplifier-log-viewer  # Uses local source
+```
+
+**Running installed tool instead of local edits**:
+```bash
+# Tool installation (isolated in ~/.local/share/uv/tools/)
+uv tool install --reinstall --force .
+
+# Development (uses local source)
+uv run amplifier-log-viewer
+```
 
 ## Contributing
 

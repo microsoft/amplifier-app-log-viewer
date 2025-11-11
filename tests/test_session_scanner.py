@@ -28,7 +28,7 @@ def mock_amplifier_home(tmp_path):
             metadata = {
                 "session_id": session_id,
                 "timestamp": f"2025-11-10T15:30:{i:02d}Z",
-                "parent_session_id": None if i == 0 else f"session-{project_slug}-0"
+                "parent_session_id": None if i == 0 else f"session-{project_slug}-0",
             }
 
             metadata_file = session_dir / "metadata.json"
@@ -82,9 +82,10 @@ def test_session_hierarchy(mock_amplifier_home):
 
 
 def test_scan_projects_missing_directory(tmp_path):
-    """Test scanning when projects directory doesn't exist."""
-    with pytest.raises(FileNotFoundError):
-        session_scanner.scan_projects(tmp_path / "nonexistent")
+    """Test scanning when projects directory doesn't exist returns empty tree."""
+    tree = session_scanner.scan_projects(tmp_path / "nonexistent")
+    assert len(tree.projects) == 0
+    assert len(tree.session_index) == 0
 
 
 def test_session_children_populated(mock_amplifier_home):

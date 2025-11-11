@@ -15,12 +15,7 @@ def temp_events_file(tmp_path):
     # Write 10 test events
     events = []
     for i in range(10):
-        event = {
-            "ts": f"2025-11-10T15:30:{i:02d}.000Z",
-            "lvl": "info",
-            "event": "test:event",
-            "data": {"index": i}
-        }
+        event = {"ts": f"2025-11-10T15:30:{i:02d}.000Z", "lvl": "info", "event": "test:event", "data": {"index": i}}
         events.append(event)
 
     with open(events_file, "w") as f:
@@ -64,7 +59,7 @@ def test_read_events_corrupted_line(tmp_path):
 
     with open(events_file, "w") as f:
         f.write('{"valid": "event1"}\n')
-        f.write('invalid json here\n')  # Corrupted
+        f.write("invalid json here\n")  # Corrupted
         f.write('{"valid": "event2"}\n')
 
     events, total = log_reader.read_events(events_file)

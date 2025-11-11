@@ -22,16 +22,15 @@ body {
 /* Header */
 .app-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     background-color: var(--color-bg-secondary);
     border-bottom: var(--border-width-1) solid var(--color-border-primary);
-    height: 64px;
     flex-shrink: 0;
 }
 
-.header-left {
+.header-top {
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
@@ -50,8 +49,10 @@ body {
 
 .header-controls {
     display: flex;
+    flex-direction: row;
     gap: var(--space-2);
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .selector {
@@ -67,7 +68,9 @@ body {
 }
 
 .selector-wide {
-    min-width: 450px;
+    min-width: 350px;
+    flex: 1;
+    max-width: 500px;
 }
 
 .selector:hover {

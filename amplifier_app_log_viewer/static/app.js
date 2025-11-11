@@ -62,6 +62,10 @@ class LogViewer {
         this.projectSelector.addEventListener('change', () => this.onProjectChange());
         this.sessionSelector.addEventListener('change', () => this.onSessionChange());
         this.refreshBtn.addEventListener('click', () => this.refresh());
+
+        // Refresh when dropdowns are opened (focused)
+        this.projectSelector.addEventListener('focus', () => this.refreshProjectList());
+        this.sessionSelector.addEventListener('focus', () => this.refreshSessionList());
         this.clearFiltersBtn.addEventListener('click', () => this.clearFilters());
 
         // Filter listeners with debounce and localStorage save
@@ -515,11 +519,112 @@ class LogViewer {
         this.applyFilters();
     }
 
+    async refreshProjectList() {
+        // Refresh project list when dropdown is opened (focused)
+        try {
+            const response = await fetch('/api/projects');
+            const data = await response.json();
+            const newProjects = data.projects || [];
+
+            // Only update if there are changes
+            if (JSON.stringify(newProjects) !== JSON.stringify(this.projects)) {
+                const currentSelection = this.projectSelector.value;
+                this.projects = newProjects;
+
+                // Rebuild dropdown
+                this.projectSelector.innerHTML = '<option value="">Select project...</option>';
+                this.projects.forEach(project => {
+                    const option = document.createElement('option');
+                    option.value = project.slug;
+                    option.textContent = `${project.slug} (${project.session_count} sessions)`;
+                    this.projectSelector.appendChild(option);
+                });
+
+                // Restore selection if it still exists
+                if (currentSelection && this.projects.find(p => p.slug === currentSelection)) {
+                    this.projectSelector.value = currentSelection;
+                }
+            }
+        } catch (error) {
+            console.error('Failed to refresh project list:', error);
+        }
+    }
+
+    async refreshSessionList() {
+        // Refresh session list when dropdown is opened (focused)
+        const projectSlug = this.projectSelector.value;
+        if (!projectSlug) return;
+
+        try {
+            const response = await fetch(`/api/sessions?project=${projectSlug}`);
+            const data = await response.json();
+            const newSessions = data.sessions || [];
+
+            // Only update if there are changes
+            if (JSON.stringify(newSessions) !== JSON.stringify(this.sessions)) {
+                const currentSelection = this.sessionSelector.value;
+                this.sessions = newSessions;
+
+                // Rebuild dropdown
+                this.sessionSelector.innerHTML = '<option value="">Select session...</option>';
+                this.sessions.forEach(session => {
+                    const option = document.createElement('option');
+                    option.value = session.id;
+
+                    // Format session display
+                    let displayText = '';
+                    const parts = session.id.split('-');
+                    if (parts.length > 5) {
+                        const shortId = session.id.substring(0, 8);
+                        const agentPart = parts.slice(5).join('-');
+                        displayText = `${shortId}... [${agentPart}]`;
+                    } else {
+                        displayText = session.id.substring(0, 8) + '...';
+                    }
+
+                    if (session.timestamp) {
+                        const ts = new Date(session.timestamp);
+                        displayText += ` - ${ts.toLocaleString()}`;
+                    } else {
+                        displayText += ' - No timestamp';
+                    }
+
+                    option.textContent = displayText;
+                    this.sessionSelector.appendChild(option);
+                });
+
+                // Restore selection if it still exists
+                if (currentSelection && this.sessions.find(s => s.id === currentSelection)) {
+                    this.sessionSelector.value = currentSelection;
+                }
+            }
+        } catch (error) {
+            console.error('Failed to refresh session list:', error);
+        }
+    }
+
     async refresh() {
+        // Force server-side refresh by calling /api/refresh endpoint
+        try {
+            const response = await fetch('/api/refresh', { method: 'POST' });
+            if (!response.ok) {
+                console.error('Failed to refresh session tree');
+            }
+        } catch (error) {
+            console.error('Error calling refresh endpoint:', error);
+        }
+
+        // Always reload projects list to get new projects/sessions
+        await this.loadProjects();
+
+        // If we were viewing a specific project, reload its sessions
+        if (this.projectSelector.value) {
+            await this.loadSessions(this.projectSelector.value);
+        }
+
+        // If we were viewing a specific session, reload its events
         if (this.currentSessionId) {
             await this.loadEvents(this.currentSessionId);
-        } else {
-            await this.loadProjects();
         }
     }
 

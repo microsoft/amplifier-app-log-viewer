@@ -7,9 +7,7 @@ from pathlib import Path
 
 def main():
     """Main entry point for amplifier-log-viewer CLI."""
-    parser = argparse.ArgumentParser(
-        description="Web-based log viewer for Amplifier sessions"
-    )
+    parser = argparse.ArgumentParser(description="Web-based log viewer for Amplifier sessions")
     parser.add_argument(
         "--port",
         type=int,

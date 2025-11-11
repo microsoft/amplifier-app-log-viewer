@@ -44,16 +44,15 @@ def scan_projects(amplifier_home: Path | None = None) -> SessionTree:
         amplifier_home: Path to ~/.amplifier directory (default: ~/.amplifier)
 
     Returns:
-        SessionTree with all projects and sessions
-
-    Raises:
-        FileNotFoundError: If ~/.amplifier doesn't exist
+        SessionTree with all projects and sessions (empty if projects dir doesn't exist)
     """
     if amplifier_home is None:
         amplifier_home = Path.home() / ".amplifier"
     projects_dir = amplifier_home / "projects"
+
+    # Return empty tree if projects directory doesn't exist yet
     if not projects_dir.exists():
-        raise FileNotFoundError(f"Projects directory not found: {projects_dir}")
+        return SessionTree(projects=[], session_index={})
 
     projects = []
     session_index = {}
