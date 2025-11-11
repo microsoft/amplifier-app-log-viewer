@@ -1,0 +1,15 @@
+[project]
+name = "amplifier-app-log-viewer"
+version = "0.1.0"
+description = "Web-based log viewer for Amplifier sessions"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+]
+
+[project.scripts]
+amplifier-log-viewer = "amplifier_app_log_viewer.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

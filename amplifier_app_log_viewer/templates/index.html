@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amplifier Log Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='tokens.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='js/json-viewer/json-viewer.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header with session selectors and filters -->
+        <header class="app-header">
+            <div class="header-left">
+                <h1>Amplifier Log Viewer</h1>
+                <span class="version">Developer Tool</span>
+            </div>
+            <div class="header-controls">
+                <select id="project-selector" class="selector">
+                    <option value="">Select project...</option>
+                </select>
+                <select id="session-selector" class="selector selector-wide">
+                    <option value="">Select session...</option>
+                </select>
+                <button id="refresh-btn" class="btn-icon" title="Refresh">↻</button>
+            </div>
+        </header>
+
+        <!-- Filter bar -->
+        <div class="filter-bar">
+            <input
+                type="text"
+                id="filter-input"
+                class="search-input"
+                placeholder="Search events..."
+            >
+            <select id="level-filter" class="filter-select">
+                <option value="">All Levels</option>
+                <option value="INFO">INFO</option>
+                <option value="DEBUG">DEBUG</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+            </select>
+            <select id="event-type-filter" class="filter-select">
+                <option value="">All Event Types</option>
+                <!-- Dynamically populated from actual events -->
+            </select>
+            <button id="clear-filters" class="btn-secondary">Clear</button>
+            <span id="filter-count" class="filter-count"></span>
+        </div>
+
+        <!-- Main content: 2-pane layout (Network tab style) -->
+        <div class="main-content">
+            <!-- Event List (left, auto-width) -->
+            <div class="event-list-pane">
+                <div id="event-list-content" class="event-list-content">
+                    <div class="welcome-message">
+                        <p>Select a project and session to view logs</p>
+                    </div>
+                </div>
+                <div id="loading-indicator" class="loading-indicator" style="display: none;">
+                    Loading events...
+                </div>
+            </div>
+
+            <!-- Detail Panel (right, flex-fill) -->
+            <div class="detail-panel">
+                <div class="detail-header">
+                    <h3 id="detail-title">Event Details</h3>
+                    <div class="detail-actions">
+                        <button id="copy-event-btn" class="btn-small" title="Copy Event JSON">Copy</button>
+                        <button id="close-detail-btn" class="btn-small">✕</button>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="tabs">
+                    <button class="tab-button active" data-tab="overview">Overview</button>
+                    <button class="tab-button" data-tab="data">Data</button>
+                    <button class="tab-button" data-tab="raw">Raw JSON</button>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="tab-content">
+                    <!-- Overview Tab -->
+                    <div id="overview-tab" class="tab-pane active">
+                        <div class="detail-content">
+                            <p class="placeholder">Select an event to view details</p>
+                        </div>
+                    </div>
+
+                    <!-- Data Tab (uses JSONViewer) -->
+                    <div id="data-tab" class="tab-pane">
+                        <div id="data-viewer" class="json-viewer-container"></div>
+                    </div>
+
+                    <!-- Raw JSON Tab -->
+                    <div id="raw-tab" class="tab-pane">
+                        <div class="raw-actions">
+                            <button id="copy-raw-btn" class="btn-small">Copy All</button>
+                        </div>
+                        <pre id="raw-json" class="json-display"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/json-viewer/json-viewer.js') }}"></script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
