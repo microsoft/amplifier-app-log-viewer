@@ -1,6 +1,7 @@
 """CLI entry point for amplifier-log-viewer."""
 
 import argparse
+import contextlib
 import webbrowser
 from pathlib import Path
 
@@ -63,7 +64,9 @@ def main():
     if not args.no_browser:
         url = f"http://localhost:{args.port}"
         print(f"Opening browser to {url}")
-        webbrowser.open(url)
+        # Suppress browser auto-open errors (common in WSL/headless environments)
+        with contextlib.suppress(Exception):
+            webbrowser.open(url)
 
     print(f"Server running on http://localhost:{args.port}")
     print("Press Ctrl+C to stop")
