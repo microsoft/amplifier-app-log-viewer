@@ -1,8 +1,6 @@
 """CLI entry point for amplifier-log-viewer."""
 
 import argparse
-import contextlib
-import webbrowser
 from pathlib import Path
 
 
@@ -21,15 +19,10 @@ def main():
         default=Path.home() / ".amplifier" / "projects",
         help="Path to Amplifier projects directory (default: ~/.amplifier/projects)",
     )
-    parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Don't open browser automatically",
-    )
 
     args = parser.parse_args()
 
-    # Start server in background thread, then open browser
+    # Start server in background thread
     import threading
     import time
 
@@ -60,15 +53,8 @@ def main():
     server_ready.wait(timeout=5)
     time.sleep(0.5)  # Give Flask time to bind socket
 
-    # Open browser unless disabled
-    if not args.no_browser:
-        url = f"http://localhost:{args.port}"
-        print(f"Opening browser to {url}")
-        # Suppress browser auto-open errors (common in WSL/headless environments)
-        with contextlib.suppress(Exception):
-            webbrowser.open(url)
-
-    print(f"Server running on http://localhost:{args.port}")
+    print(f"\nServer running on http://localhost:{args.port}")
+    print("Open this URL in your browser to view logs")
     print("Press Ctrl+C to stop")
 
     # Keep main thread alive

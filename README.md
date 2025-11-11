@@ -18,17 +18,14 @@ uv pip install -e .
 ## Usage
 
 ```bash
-# Start the viewer (opens browser automatically)
+# Start the viewer
 amplifier-log-viewer
 
 # Custom port
 amplifier-log-viewer --port 9000
-
-# Don't open browser
-amplifier-log-viewer --no-browser
 ```
 
-Opens at `http://localhost:8180` by default.
+Server starts at `http://localhost:8180` by default. Open this URL in your browser.
 
 ## Features
 
