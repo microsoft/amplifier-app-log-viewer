@@ -179,23 +179,32 @@ def stream_events(session_id: str):
 
 def run_server(projects_dir: Path, port: int = 8180):
     """
-    Start Flask server.
+    Start Flask server with automatic port selection if requested port is in use.
 
     Args:
         projects_dir: Path to ~/.amplifier/projects directory
-        port: Port to run server on
+        port: Port to run server on (will try next ports if in use)
     """
     print(f"Initializing session tree from {projects_dir}")
     init_session_tree(projects_dir)
 
-    print(f"Starting server on http://localhost:{port}")
-    print("Press Ctrl+C to stop")
-
-    try:
-        app.run(host="127.0.0.1", port=port, debug=False)
-    except OSError as e:
-        if "Address already in use" in str(e):
-            print(f"\nError: Port {port} is already in use.")
-            print("Try a different port with: amplifier-log-viewer --port <PORT>")
-            raise SystemExit(1) from e
-        raise
+    # Try requested port, then auto-increment if in use
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try_port = port + attempt
+        try:
+            print(f"Starting server on http://localhost:{try_port}")
+            print("Press Ctrl+C to stop")
+            app.run(host="127.0.0.1", port=try_port, debug=False)
+            break
+        except OSError as e:
+            if "Address already in use" in str(e):
+                if attempt < max_attempts - 1:
+                    print(f"Port {try_port} in use, trying {try_port + 1}...")
+                    continue
+                else:
+                    print(f"\nError: Ports {port}-{try_port} all in use.")
+                    print("Try a different port with: amplifier-log-viewer --port <PORT>")
+                    raise SystemExit(1) from e
+            else:
+                raise

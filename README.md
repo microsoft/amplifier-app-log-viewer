@@ -37,7 +37,7 @@ Opens at `http://localhost:8180` by default.
 - **Smart filtering** - Dynamic event types, log levels, text search
 - **Session hierarchy** - Parent and sub-agent session navigation
 - **LLM inspection** - View complete request/response debug data
-- **Network tab UI** - Chrome DevTools-inspired 2-pane layout
+- **Network tab UI** - Browser developer tools-inspired 2-pane layout
 - **Persistent preferences** - Remembers selections and filters
 
 ## Quick Start
