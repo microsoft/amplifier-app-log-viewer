@@ -1,163 +1,67 @@
 # Amplifier Log Viewer
 
-Web-based log viewer for Amplifier sessions with real-time updates.
-
-## Features
-
-- **Session browsing**: Navigate through all Amplifier sessions by project
-- **Real-time updates**: See new log entries as they're written (SSE streaming)
-- **Event filtering**: Filter by log level, event type, or search text
-- **Raw LLM inspection**: View complete LLM request/response payloads
-- **Session hierarchy**: Understand parent-child session relationships
-- **Network tab-style UI**: Chrome DevTools-inspired 2-pane layout
-- **Interactive JSON viewer**: Collapsible/expandable with smart defaults
+Web-based developer tool for visualizing and debugging Amplifier session logs in real-time.
 
 ## Installation
 
 ```bash
-# Install from source
-cd amplifier-app-log-viewer
-pip install -e .
+# Run directly with uvx (recommended)
+uvx --from git+https://github.com/microsoft/amplifier-app-log-viewer@main amplifier-log-viewer
 
-# Or use uv
+# Or install with uv
+uv tool install git+https://github.com/microsoft/amplifier-app-log-viewer@main
+
+# Or from local source
 uv pip install -e .
 ```
 
 ## Usage
 
-### Basic Usage
-
 ```bash
-# Start the log viewer (opens browser automatically)
+# Start the viewer (opens browser automatically)
 amplifier-log-viewer
 
-# Or with uvx
-uvx --from . amplifier-log-viewer
-```
-
-### Options
-
-```bash
 # Custom port
 amplifier-log-viewer --port 9000
 
-# Custom projects directory
-amplifier-log-viewer --projects-dir /path/to/.amplifier/projects
-
-# Don't open browser automatically
+# Don't open browser
 amplifier-log-viewer --no-browser
 ```
 
-### In Browser
+Opens at `http://localhost:8180` by default.
 
-1. **Select a project and session** from header dropdowns
-2. **Browse events** in the left list (Network tab style)
-3. **Click an event** to see full details with interactive JSON viewer
-4. **Use tabs** in detail panel:
-   - **Overview**: Event metadata and summary
-   - **Data**: Interactive JSON with expand/collapse
-   - **Raw JSON**: Complete event as formatted JSON
-5. **Use filters** to narrow down events:
-   - Text search: searches all event data
-   - Level filter: INFO, DEBUG, WARNING, ERROR
-   - Event type filter: llm:request:raw, llm:response:raw, tool:pre, etc.
-6. **Copy data**: Click copy buttons to export event JSON
+## Features
 
-## Architecture
+- **Real-time log streaming** - See events as Amplifier writes them
+- **Interactive JSON viewer** - Collapsible/expandable with smart defaults
+- **Smart filtering** - Dynamic event types, log levels, text search
+- **Session hierarchy** - Parent and sub-agent session navigation
+- **LLM inspection** - View complete request/response debug data
+- **Network tab UI** - Chrome DevTools-inspired 2-pane layout
+- **Persistent preferences** - Remembers selections and filters
 
-### Backend (Python/Flask)
+## Quick Start
 
-- `log_reader.py` - JSONL parsing with pagination
-- `session_scanner.py` - Session discovery and hierarchy
-- `server.py` - Flask app with REST API + SSE endpoints
-
-### Frontend (Vanilla JS)
-
-- `templates/index.html` - 2-pane Network tab-style layout
-- `static/app.js` - Unified LogViewer class with filtering
-- `static/js/json-viewer/` - Interactive JSON viewer component
-- `static/style.css` - Component styles (Network tab inspired)
-- `static/tokens.css` - Design tokens (dark mode optimized)
-
-### API Endpoints
-
-- `GET /` - Main UI
-- `GET /api/projects` - List all projects
-- `GET /api/sessions?project=<slug>` - List sessions for project
-- `GET /api/events?session=<id>&offset=<n>&limit=<m>` - Paginated events
-- `GET /api/session/<id>/metadata` - Session metadata
-- `GET /stream/<id>` - SSE stream for real-time updates
+1. Select project and session from header dropdowns
+2. Events appear in left list with color-coded levels
+3. Click any event to see details in right panel
+4. Use filters to find specific events (auto-populated from your data)
+5. Data tab shows interactive JSON with expand/collapse
 
 ## Log File Location
 
-Sessions are stored at:
-```
-~/.amplifier/projects/<project-slug>/sessions/<session-id>/
-  ├── events.jsonl       # All events
-  ├── transcript.jsonl   # Conversation messages
-  └── metadata.json      # Session metadata
-```
-
-## Development
-
-### Run Tests
-
-```bash
-pytest tests/
-```
-
-### Local Development
-
-```bash
-# Install in editable mode
-uv pip install -e .
-
-# Run directly
-python -m amplifier_app_log_viewer
-
-# Or use the script
-amplifier-log-viewer
-```
+Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
+- `events.jsonl` - All lifecycle events
+- `transcript.jsonl` - Conversation messages
+- `metadata.json` - Session metadata
 
 ## Troubleshooting
 
-### "No sessions found"
+**"No sessions found"**: Run Amplifier at least once to create session logs at `~/.amplifier/projects/`
 
-- Check that `~/.amplifier/projects/` exists
-- Verify you've run Amplifier at least once to create sessions
-- Try `--projects-dir` flag to point to correct location
+**Port conflict**: Use `--port <number>` to specify different port
 
-### Events not updating in real-time
-
-- SSE connection may have dropped (check browser console)
-- Browser will auto-reconnect within a few seconds
-- Refresh the page to re-establish connection
-
-### Port already in use
-
-- Use `--port` flag to specify different port
-- Or kill the process using port 8080: `lsof -ti:8080 | xargs kill`
-
-## Philosophy
-
-Built following Amplifier's ruthless simplicity principles:
-
-- **No build step**: Vanilla JS, no webpack/bundlers
-- **Direct Flask**: No over-engineered frameworks
-- **File-based**: Reads directly from `~/.amplifier`, no database
-- **SSE over WebSocket**: Simpler for unidirectional streaming
-- **Minimal dependencies**: Just Flask for backend
-
-## Future Enhancements
-
-MVP focuses on core viewing and filtering. Potential enhancements:
-
-- Advanced JSON search (query syntax)
-- Export functionality (filtered events → JSON)
-- Timeline visualization
-- Resizable panes
-- Session comparison view
-- Performance profiling view
+**White background**: Hard refresh browser (Ctrl+Shift+R or Cmd+Shift+R)
 
 ## Contributing
 
