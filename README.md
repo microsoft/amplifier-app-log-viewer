@@ -60,8 +60,6 @@ Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
 
 **"No sessions found"**: Run Amplifier at least once to create session logs at `~/.amplifier/projects/`
 
-**Port conflict**: Use `--port <number>` to specify different port
-
 ## Contributing
 
 > [!NOTE]
