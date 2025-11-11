@@ -5,11 +5,11 @@ Web-based developer tool for visualizing and debugging Amplifier session logs in
 ## Installation
 
 ```bash
-# Run directly with uvx (recommended)
-uvx --from git+https://github.com/microsoft/amplifier-app-log-viewer@main amplifier-log-viewer
-
-# Or install with uv
+# Install globally (recommended)
 uv tool install git+https://github.com/microsoft/amplifier-app-log-viewer@main
+
+# Or run directly with uvx (no install)
+uvx --from git+https://github.com/microsoft/amplifier-app-log-viewer@main amplifier-log-viewer
 
 # Or from local source
 uv pip install -e .
@@ -51,6 +51,7 @@ Opens at `http://localhost:8180` by default.
 ## Log File Location
 
 Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
+
 - `events.jsonl` - All lifecycle events
 - `transcript.jsonl` - Conversation messages
 - `metadata.json` - Session metadata
@@ -60,8 +61,6 @@ Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
 **"No sessions found"**: Run Amplifier at least once to create session logs at `~/.amplifier/projects/`
 
 **Port conflict**: Use `--port <number>` to specify different port
-
-**White background**: Hard refresh browser (Ctrl+Shift+R or Cmd+Shift+R)
 
 ## Contributing
 
