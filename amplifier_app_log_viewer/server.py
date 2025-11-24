@@ -204,7 +204,12 @@ def stream_events(session_id: str):
 
     def event_stream():
         """Generate SSE events."""
-        last_position = 0
+        # Initialize to end of file to avoid re-sending events already loaded via REST API
+        try:
+            last_position = session.events_path.stat().st_size
+        except OSError:
+            # If file doesn't exist or can't be read, start from beginning
+            last_position = 0
 
         while True:
             # Check for new events
