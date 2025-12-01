@@ -13,3 +13,9 @@ amplifier-log-viewer = "amplifier_app_log_viewer.__main__:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "strict"
+
