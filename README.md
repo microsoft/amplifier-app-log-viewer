@@ -23,6 +23,9 @@ amplifier-log-viewer
 
 # Custom port
 amplifier-log-viewer --port 9000
+
+# Sort sessions by timestamp (most recent first) instead of session ID
+amplifier-log-viewer --sort-by-timestamp
 ```
 
 Server starts at `http://localhost:8180` by default. Open this URL in your browser.

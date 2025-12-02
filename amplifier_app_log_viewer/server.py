@@ -19,14 +19,16 @@ app = Flask(__name__)
 # Global state
 _session_tree = None
 _projects_dir = None
+_sort_by_timestamp = False
 _last_scan_time = 0
 _cache_duration = 3  # Seconds before auto-refresh (reduced for better UX)
 
 
-def init_session_tree(projects_dir: Path):
+def init_session_tree(projects_dir: Path, sort_by_timestamp: bool = False):
     """Initialize session tree from projects directory."""
-    global _projects_dir
+    global _projects_dir, _sort_by_timestamp
     _projects_dir = projects_dir
+    _sort_by_timestamp = sort_by_timestamp
     refresh_session_tree()
 
 
@@ -37,7 +39,7 @@ def refresh_session_tree():
         raise RuntimeError("Projects directory not initialized")
 
     amplifier_home = _projects_dir.parent
-    _session_tree = session_scanner.scan_projects(amplifier_home)
+    _session_tree = session_scanner.scan_projects(amplifier_home, sort_by_timestamp=_sort_by_timestamp)
     _last_scan_time = time.time()
 
     # Log refresh for debugging

@@ -19,6 +19,11 @@ def main():
         default=Path.home() / ".amplifier" / "projects",
         help="Path to Amplifier projects directory (default: ~/.amplifier/projects)",
     )
+    parser.add_argument(
+        "--sort-by-timestamp",
+        action="store_true",
+        help="Sort sessions by timestamp (most recent first) instead of session ID",
+    )
 
     args = parser.parse_args()
 
@@ -33,7 +38,7 @@ def main():
         from .server import app
         from .server import init_session_tree
 
-        init_session_tree(args.projects_dir)
+        init_session_tree(args.projects_dir, sort_by_timestamp=args.sort_by_timestamp)
         server_ready.set()
 
         try:
