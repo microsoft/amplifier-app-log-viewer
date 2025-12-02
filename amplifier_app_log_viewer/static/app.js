@@ -17,6 +17,7 @@ class LogViewer {
         this.projectSelector = document.getElementById('project-selector');
         this.sessionSelector = document.getElementById('session-selector');
         this.refreshBtn = document.getElementById('refresh-btn');
+        this.sortByTimestampCheckbox = document.getElementById('sort-by-timestamp-checkbox');
         this.filterInput = document.getElementById('filter-input');
         this.levelFilter = document.getElementById('level-filter');
         this.eventTypeFilter = document.getElementById('event-type-filter');
@@ -52,8 +53,9 @@ class LogViewer {
     }
 
     init() {
-        // Restore filter state from localStorage
+        // Restore filter state and sort preference from localStorage
         this.restoreFilterState();
+        this.restoreSortPreference();
 
         // Load projects on startup
         this.loadProjects();
@@ -62,6 +64,7 @@ class LogViewer {
         this.projectSelector.addEventListener('change', () => this.onProjectChange());
         this.sessionSelector.addEventListener('change', () => this.onSessionChange());
         this.refreshBtn.addEventListener('click', () => this.refresh());
+        this.sortByTimestampCheckbox.addEventListener('change', () => this.onSortPreferenceChange());
 
         // Refresh when dropdowns are opened (focused)
         this.projectSelector.addEventListener('focus', () => this.refreshProjectList());
@@ -113,6 +116,45 @@ class LogViewer {
         if (filters.eventType) this.eventTypeFilter.value = filters.eventType;
     }
 
+    restoreSortPreference() {
+        const sortByTimestamp = this.loadFromStorage('sortByTimestamp', false);
+        this.sortByTimestampCheckbox.checked = sortByTimestamp;
+    }
+
+    onSortPreferenceChange() {
+        // Save preference
+        this.saveToStorage('sortByTimestamp', this.sortByTimestampCheckbox.checked);
+
+        // Re-render session list with new sort order
+        this.renderSessionList();
+    }
+
+    sortSessions(sessions) {
+        // Create a copy to avoid mutating original
+        const sorted = [...sessions];
+
+        if (this.sortByTimestampCheckbox.checked) {
+            // Sort by timestamp: no timestamp at top, then most recent first
+            sorted.sort((a, b) => {
+                const aHasTs = !!a.timestamp;
+                const bHasTs = !!b.timestamp;
+
+                // No timestamp goes first
+                if (!aHasTs && bHasTs) return -1;
+                if (aHasTs && !bHasTs) return 1;
+                if (!aHasTs && !bHasTs) return 0;
+
+                // Both have timestamps - sort descending (most recent first)
+                return b.timestamp.localeCompare(a.timestamp);
+            });
+        } else {
+            // Sort by session ID (default)
+            sorted.sort((a, b) => a.id.localeCompare(b.id));
+        }
+
+        return sorted;
+    }
+
     async loadProjects() {
         try {
             const response = await fetch('/api/projects');
@@ -154,37 +196,8 @@ class LogViewer {
             const data = await response.json();
             this.sessions = data.sessions || [];
 
-            this.sessionSelector.innerHTML = '<option value="">Select session...</option>';
-            this.sessions.forEach(session => {
-                const option = document.createElement('option');
-                option.value = session.id;
-
-                // Format session display
-                let displayText = '';
-
-                // Check if it's a sub-agent session (has suffix after 5th hyphen)
-                const parts = session.id.split('-');
-                if (parts.length > 5) {
-                    // Sub-agent session: show short ID + agent name
-                    const shortId = session.id.substring(0, 8);
-                    const agentPart = parts.slice(5).join('-'); // Everything after UUID
-                    displayText = `${shortId}... [${agentPart}]`;
-                } else {
-                    // Parent session: show short ID
-                    displayText = session.id.substring(0, 8) + '...';
-                }
-
-                // Add timestamp if available
-                if (session.timestamp) {
-                    const ts = new Date(session.timestamp);
-                    displayText += ` - ${ts.toLocaleString()}`;
-                } else {
-                    displayText += ' - No timestamp';
-                }
-
-                option.textContent = displayText;
-                this.sessionSelector.appendChild(option);
-            });
+            // Render the session list with current sort order
+            this.renderSessionList();
 
             // Restore last selected session or auto-select first
             const lastSession = this.loadFromStorage('lastSession');
@@ -199,6 +212,44 @@ class LogViewer {
             console.error('Failed to load sessions:', error);
             this.showError('Failed to load sessions');
         }
+    }
+
+    renderSessionList() {
+        // Sort sessions based on checkbox preference
+        const sortedSessions = this.sortSessions(this.sessions);
+
+        // Render the sorted sessions
+        this.sessionSelector.innerHTML = '<option value="">Select session...</option>';
+        sortedSessions.forEach(session => {
+            const option = document.createElement('option');
+            option.value = session.id;
+
+            // Format session display
+            let displayText = '';
+
+            // Check if it's a sub-agent session (has suffix after 5th hyphen)
+            const parts = session.id.split('-');
+            if (parts.length > 5) {
+                // Sub-agent session: show short ID + agent name
+                const shortId = session.id.substring(0, 8);
+                const agentPart = parts.slice(5).join('-'); // Everything after UUID
+                displayText = `${shortId}... [${agentPart}]`;
+            } else {
+                // Parent session: show short ID
+                displayText = session.id.substring(0, 8) + '...';
+            }
+
+            // Add timestamp if available
+            if (session.timestamp) {
+                const ts = new Date(session.timestamp);
+                displayText += ` - ${ts.toLocaleString()}`;
+            } else {
+                displayText += ' - No timestamp';
+            }
+
+            option.textContent = displayText;
+            this.sessionSelector.appendChild(option);
+        });
     }
 
     async loadEvents(sessionId) {

@@ -36,14 +36,12 @@ class SessionTree:
     session_index: dict[str, Session]
 
 
-def scan_projects(amplifier_home: Path | None = None, sort_by_timestamp: bool = False) -> SessionTree:
+def scan_projects(amplifier_home: Path | None = None) -> SessionTree:
     """
     Scan ~/.amplifier/projects/ and build session tree.
 
     Args:
         amplifier_home: Path to ~/.amplifier directory (default: ~/.amplifier)
-        sort_by_timestamp: If True, sort sessions by timestamp (most recent first).
-                          If False, sort by session ID (default).
 
     Returns:
         SessionTree with all projects and sessions (empty if projects dir doesn't exist)
@@ -111,13 +109,8 @@ def scan_projects(amplifier_home: Path | None = None, sort_by_timestamp: bool = 
             project_sessions.append(session)
             session_index[session_id] = session
 
-        # Sort sessions
-        if sort_by_timestamp:
-            # Sort by timestamp: no timestamp at top, then most recent first
-            project_sessions.sort(key=lambda s: (bool(s.timestamp), s.timestamp), reverse=True)
-        else:
-            # Sort by session ID (default)
-            project_sessions.sort(key=lambda s: s.id)
+        # Sort sessions by session ID (client can re-sort as needed)
+        project_sessions.sort(key=lambda s: s.id)
 
         # Create project object
         project = Project(
