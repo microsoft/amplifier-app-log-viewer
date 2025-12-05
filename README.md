@@ -31,20 +31,22 @@ Server starts at `http://localhost:8180` by default. Open this URL in your brows
 
 - **Real-time log streaming** - See events as Amplifier writes them
 - **Auto-refresh** - Automatically detects new projects and sessions (10-second cache)
+- **Flexible session sorting** - Toggle between ID or timestamp order (most recent first)
 - **Interactive JSON viewer** - Collapsible/expandable with smart defaults
 - **Smart filtering** - Dynamic event types, log levels, text search
 - **Session hierarchy** - Parent and sub-agent session navigation
 - **LLM inspection** - View complete request/response debug data
 - **Network tab UI** - Browser developer tools-inspired 2-pane layout
-- **Persistent preferences** - Remembers selections and filters
+- **Persistent preferences** - Remembers selections, filters, and sort order
 
 ## Quick Start
 
 1. Select project and session from header dropdowns
-2. Events appear in left list with color-coded levels
-3. Click any event to see details in right panel
-4. Use filters to find specific events (auto-populated from your data)
-5. Data tab shows interactive JSON with expand/collapse
+2. Toggle "Sort by timestamp" checkbox to sort sessions chronologically (preference saved)
+3. Events appear in left list with color-coded levels
+4. Click any event to see details in right panel
+5. Use filters to find specific events (auto-populated from your data)
+6. Data tab shows interactive JSON with expand/collapse
 
 ## Log File Location
 

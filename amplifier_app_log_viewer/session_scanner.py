@@ -70,7 +70,7 @@ def scan_projects(amplifier_home: Path | None = None) -> SessionTree:
 
         # Scan sessions for this project
         project_sessions = []
-        for session_dir in sorted(sessions_dir.iterdir()):
+        for session_dir in sessions_dir.iterdir():
             if not session_dir.is_dir():
                 continue
 
@@ -108,6 +108,9 @@ def scan_projects(amplifier_home: Path | None = None) -> SessionTree:
 
             project_sessions.append(session)
             session_index[session_id] = session
+
+        # Sort sessions by session ID (client can re-sort as needed)
+        project_sessions.sort(key=lambda s: s.id)
 
         # Create project object
         project = Project(
