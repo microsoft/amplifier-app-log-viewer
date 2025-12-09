@@ -18,7 +18,7 @@ def temp_events_file(tmp_path):
         event = {"ts": f"2025-11-10T15:30:{i:02d}.000Z", "lvl": "info", "event": "test:event", "data": {"index": i}}
         events.append(event)
 
-    with open(events_file, "w") as f:
+    with open(events_file, "w", encoding="utf-8") as f:
         for event in events:
             f.write(json.dumps(event) + "\n")
 
@@ -57,7 +57,7 @@ def test_read_events_corrupted_line(tmp_path):
     """Test handling of corrupted JSON lines."""
     events_file = tmp_path / "corrupted.jsonl"
 
-    with open(events_file, "w") as f:
+    with open(events_file, "w", encoding="utf-8") as f:
         f.write('{"valid": "event1"}\n')
         f.write("invalid json here\n")  # Corrupted
         f.write('{"valid": "event2"}\n')
@@ -75,7 +75,7 @@ def test_tail_events(tmp_path):
     events_file = tmp_path / "events.jsonl"
 
     # Write initial events
-    with open(events_file, "w") as f:
+    with open(events_file, "w", encoding="utf-8") as f:
         f.write('{"index": 0}\n')
         f.write('{"index": 1}\n')
 
