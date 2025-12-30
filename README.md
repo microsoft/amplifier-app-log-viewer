@@ -17,15 +17,60 @@ uv pip install -e .
 
 ## Usage
 
+### Foreground Mode (Default)
+
 ```bash
 # Start the viewer
 amplifier-log-viewer
 
 # Custom port
 amplifier-log-viewer --port 9000
+
+# Bind to all interfaces (accessible from other machines)
+amplifier-log-viewer --host 0.0.0.0
+
+# Custom projects directory
+amplifier-log-viewer --projects-dir /path/to/projects
 ```
 
 Server starts at `http://localhost:8180` by default. Open this URL in your browser.
+
+### Service Mode (Background)
+
+Run the log viewer as a background service that starts automatically on login.
+
+**Supported platforms:**
+- **Linux/WSL**: systemd user service
+- **macOS**: launchd LaunchAgent
+
+```bash
+# Install as background service
+amplifier-log-viewer service install
+
+# Install with custom port
+amplifier-log-viewer service install --port 9000
+
+# Check service status
+amplifier-log-viewer service status
+
+# Start/stop/restart
+amplifier-log-viewer service start
+amplifier-log-viewer service stop
+amplifier-log-viewer service restart
+
+# View logs
+amplifier-log-viewer service logs
+amplifier-log-viewer service logs -f        # Follow mode (like tail -f)
+amplifier-log-viewer service logs -n 100    # Show last 100 lines
+
+# Uninstall
+amplifier-log-viewer service uninstall
+```
+
+**Service benefits:**
+- Always available - starts automatically on login
+- Background operation - no terminal window required
+- Persistent - survives reboots and re-logins
 
 ## Features
 
@@ -37,7 +82,8 @@ Server starts at `http://localhost:8180` by default. Open this URL in your brows
 - **Session hierarchy** - Parent and sub-agent session navigation
 - **LLM inspection** - View complete request/response debug data
 - **Network tab UI** - Browser developer tools-inspired 2-pane layout
-- **Persistent preferences** - Remembers selections, filters, and sort order
+- **Persistent preferences** - Remembers selections, filters, sort order, active tab, and selected event
+- **Service mode** - Run as background daemon with systemd (Linux/WSL) or launchd (macOS)
 
 ## Quick Start
 
