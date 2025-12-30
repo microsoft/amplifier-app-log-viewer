@@ -5,10 +5,11 @@ description = "Web-based log viewer for Amplifier sessions"
 requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
+    "click>=8.0.0",
 ]
 
 [project.scripts]
-amplifier-log-viewer = "amplifier_app_log_viewer.__main__:main"
+amplifier-log-viewer = "amplifier_app_log_viewer.cli:main"
 
 [build-system]
 requires = ["hatchling"]

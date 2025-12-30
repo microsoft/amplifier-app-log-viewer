@@ -23,10 +23,31 @@ _last_scan_time = 0
 _cache_duration = 3  # Seconds before auto-refresh (reduced for better UX)
 
 
+def create_app(projects_dir: str | Path | None = None) -> Flask:
+    """Create and configure the Flask application.
+
+    This is an app factory function for use with service managers.
+
+    Args:
+        projects_dir: Path to Amplifier projects directory.
+                     Defaults to ~/.amplifier/projects
+
+    Returns:
+        Configured Flask application
+    """
+    if projects_dir is None:
+        projects_dir = Path.home() / ".amplifier" / "projects"
+    else:
+        projects_dir = Path(projects_dir)
+
+    init_session_tree(projects_dir)
+    return app
+
+
 def init_session_tree(projects_dir: Path):
     """Initialize session tree from projects directory."""
     global _projects_dir
-    _projects_dir = projects_dir
+    _projects_dir = Path(projects_dir)
     refresh_session_tree()
 
 

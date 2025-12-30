@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -7,11 +7,15 @@ name = "amplifier-app-log-viewer"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "flask" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "flask", specifier = ">=3.0.0" }]
+requires-dist = [
+    { name = "click", specifier = ">=8.0.0" },
+    { name = "flask", specifier = ">=3.0.0" },
+]
 
 [[package]]
 name = "blinker"
