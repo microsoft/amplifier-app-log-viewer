@@ -7,11 +7,25 @@ class LogViewer {
         this.events = [];
         this.filteredEvents = [];
         this.selectedEvent = null;
+        this.selectedEventIndex = null;
         this.currentSessionId = null;
         this.eventStream = null;
+        this.isRestoringState = false;  // Flag to prevent saving during restore
 
         // LocalStorage keys
         this.STORAGE_PREFIX = 'amplifier-log-viewer-';
+        
+        // State persistence keys
+        this.STATE_KEYS = {
+            lastProject: 'lastProject',
+            lastSession: 'lastSession',
+            filters: 'filters',
+            sortByTimestamp: 'sortByTimestamp',
+            activeTab: 'activeTab',
+            selectedEventId: 'selectedEventId',
+            eventListScroll: 'eventListScroll',
+            detailPanelScroll: 'detailPanelScroll',
+        };
 
         // DOM elements
         this.projectSelector = document.getElementById('project-selector');
@@ -53,9 +67,10 @@ class LogViewer {
     }
 
     init() {
-        // Restore filter state and sort preference from localStorage
+        // Restore all persisted state from localStorage
         this.restoreFilterState();
         this.restoreSortPreference();
+        this.restoreActiveTab();
 
         // Load projects on startup
         this.loadProjects();
@@ -65,6 +80,13 @@ class LogViewer {
         this.sessionSelector.addEventListener('change', () => this.onSessionChange());
         this.refreshBtn.addEventListener('click', () => this.refresh());
         this.sortByTimestampCheckbox.addEventListener('change', () => this.onSortPreferenceChange());
+        
+        // Save scroll positions on scroll (debounced)
+        let scrollTimeout;
+        this.eventListContent.addEventListener('scroll', () => {
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => this.saveScrollPositions(), 200);
+        });
 
         // Refresh when dropdowns are opened (focused)
         this.projectSelector.addEventListener('focus', () => this.refreshProjectList());
@@ -90,9 +112,12 @@ class LogViewer {
             this.applyFilters();
         });
 
-        // Tab switching
+        // Tab switching (with persistence)
         document.querySelectorAll('.tab-button').forEach(btn => {
-            btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
+            btn.addEventListener('click', () => {
+                this.switchTab(btn.dataset.tab);
+                this.saveToStorage(this.STATE_KEYS.activeTab, btn.dataset.tab);
+            });
         });
 
         // Copy buttons
@@ -117,13 +142,92 @@ class LogViewer {
     }
 
     restoreSortPreference() {
-        const sortByTimestamp = this.loadFromStorage('sortByTimestamp', false);
+        const sortByTimestamp = this.loadFromStorage(this.STATE_KEYS.sortByTimestamp, false);
         this.sortByTimestampCheckbox.checked = sortByTimestamp;
+    }
+
+    restoreActiveTab() {
+        const activeTab = this.loadFromStorage(this.STATE_KEYS.activeTab, 'overview');
+        // Validate the tab exists before switching
+        const validTabs = ['overview', 'data', 'raw'];
+        if (validTabs.includes(activeTab) && activeTab !== 'overview') {
+            // Defer tab switch to ensure DOM is ready
+            requestAnimationFrame(() => {
+                this.switchTab(activeTab);
+            });
+        }
+    }
+
+    saveScrollPositions() {
+        this.saveToStorage(this.STATE_KEYS.eventListScroll, this.eventListContent.scrollTop);
+    }
+
+    restoreScrollPositions() {
+        const eventListScroll = this.loadFromStorage(this.STATE_KEYS.eventListScroll, 0);
+        if (eventListScroll > 0) {
+            // Use requestAnimationFrame to ensure DOM is ready
+            requestAnimationFrame(() => {
+                this.eventListContent.scrollTop = eventListScroll;
+            });
+        }
+    }
+
+    saveSelectedEvent() {
+        // Don't save during restore phase - this prevents overwriting saved state
+        if (this.isRestoringState) {
+            return;
+        }
+        
+        if (this.selectedEvent && this.currentSessionId) {
+            // Save by event timestamp + type + session for reliable matching across reloads
+            this.saveToStorage(this.STATE_KEYS.selectedEventId, {
+                sessionId: this.currentSessionId,
+                ts: this.selectedEvent.ts,
+                event: this.selectedEvent.event,
+                index: this.selectedEventIndex
+            });
+        } else {
+            this.saveToStorage(this.STATE_KEYS.selectedEventId, null);
+        }
+    }
+
+    restoreSelectedEvent() {
+        this.isRestoringState = true;
+        
+        const saved = this.loadFromStorage(this.STATE_KEYS.selectedEventId, null);
+        if (!saved || this.filteredEvents.length === 0) {
+            this.isRestoringState = false;
+            return;
+        }
+
+        // Try to find by exact match (ts + event type)
+        let foundIndex = this.filteredEvents.findIndex(e => 
+            e.ts === saved.ts && e.event === saved.event
+        );
+
+        // Fallback: try saved index if within bounds
+        if (foundIndex === -1 && saved.index !== undefined) {
+            if (saved.index >= 0 && saved.index < this.filteredEvents.length) {
+                foundIndex = saved.index;
+            }
+        }
+
+        // Select the event if found
+        if (foundIndex !== -1) {
+            this.selectEvent(foundIndex);
+            // Scroll the selected item into view
+            const selectedItem = this.eventListContent.querySelector(`[data-index="${foundIndex}"]`);
+            if (selectedItem) {
+                selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }
+        }
+        
+        this.isRestoringState = false;
     }
 
     onSortPreferenceChange() {
         // Save preference
-        this.saveToStorage('sortByTimestamp', this.sortByTimestampCheckbox.checked);
+        this.saveToStorage(this.STATE_KEYS.sortByTimestamp, this.sortByTimestampCheckbox.checked);
 
         // Re-render session list with new sort order
         this.renderSessionList();
@@ -170,11 +274,12 @@ class LogViewer {
             });
 
             // Restore last selected project or auto-select first
-            const lastProject = this.loadFromStorage('lastProject');
+            const lastProject = this.loadFromStorage(this.STATE_KEYS.lastProject);
             if (lastProject && this.projects.find(p => p.slug === lastProject)) {
                 this.projectSelector.value = lastProject;
                 await this.loadSessions(lastProject);
             } else if (this.projects.length > 0) {
+                // Fallback: select first project if saved one doesn't exist
                 this.projectSelector.value = this.projects[0].slug;
                 await this.loadSessions(this.projects[0].slug);
             }
@@ -200,11 +305,12 @@ class LogViewer {
             this.renderSessionList();
 
             // Restore last selected session or auto-select first
-            const lastSession = this.loadFromStorage('lastSession');
+            const lastSession = this.loadFromStorage(this.STATE_KEYS.lastSession);
             if (lastSession && this.sessions.find(s => s.id === lastSession)) {
                 this.sessionSelector.value = lastSession;
                 await this.loadEvents(lastSession);
             } else if (this.sessions.length > 0) {
+                // Fallback: select first session if saved one doesn't exist
                 this.sessionSelector.value = this.sessions[0].id;
                 await this.loadEvents(this.sessions[0].id);
             }
@@ -255,6 +361,12 @@ class LogViewer {
     async loadEvents(sessionId) {
         if (!sessionId) return;
 
+        // Check if we're restoring the same session - if so, don't clear the saved selection
+        const savedEvent = this.loadFromStorage(this.STATE_KEYS.selectedEventId, null);
+        if (savedEvent && sessionId === savedEvent.sessionId) {
+            this.isRestoringState = true;
+        }
+
         this.currentSessionId = sessionId;
         this.showLoading(true);
 
@@ -297,6 +409,12 @@ class LogViewer {
             this.showError('Failed to load events');
         } finally {
             this.showLoading(false);
+            
+            // Restore selected event AFTER loading is complete and DOM is rendered
+            // Use requestAnimationFrame to ensure DOM paint is done
+            requestAnimationFrame(() => {
+                this.restoreSelectedEvent();
+            });
         }
     }
 
@@ -492,6 +610,7 @@ class LogViewer {
 
     selectEvent(index) {
         this.selectedEvent = this.filteredEvents[index];
+        this.selectedEventIndex = index;
 
         // Update UI
         this.eventListContent.querySelectorAll('.event-item').forEach(item => {
@@ -503,6 +622,9 @@ class LogViewer {
         }
 
         this.renderEventDetail(this.selectedEvent);
+        
+        // Persist selected event
+        this.saveSelectedEvent();
     }
 
     renderEventDetail(event) {
@@ -709,6 +831,7 @@ class LogViewer {
 
     closeDetail() {
         this.selectedEvent = null;
+        this.selectedEventIndex = null;
         document.querySelectorAll('.event-item').forEach(item => {
             item.classList.remove('selected');
         });
@@ -717,6 +840,9 @@ class LogViewer {
             '<div class="detail-content"><p class="placeholder">Select an event to view details</p></div>';
         this.dataViewer.innerHTML = '';
         this.rawJson.textContent = '';
+        
+        // Clear persisted selection
+        this.saveSelectedEvent();
     }
 
     showLoading(show) {
@@ -739,7 +865,12 @@ class LogViewer {
 
     async onProjectChange() {
         const projectSlug = this.projectSelector.value;
-        this.saveToStorage('lastProject', projectSlug);
+        this.saveToStorage(this.STATE_KEYS.lastProject, projectSlug);
+        
+        // Clear session-specific state when changing projects
+        this.saveToStorage(this.STATE_KEYS.lastSession, null);
+        this.saveToStorage(this.STATE_KEYS.selectedEventId, null);
+        this.saveToStorage(this.STATE_KEYS.eventListScroll, 0);
 
         if (!projectSlug) {
             this.sessions = [];
@@ -751,14 +882,18 @@ class LogViewer {
 
     async onSessionChange() {
         const sessionId = this.sessionSelector.value;
-        this.saveToStorage('lastSession', sessionId);
+        this.saveToStorage(this.STATE_KEYS.lastSession, sessionId);
+        
+        // Clear event-specific state when changing sessions
+        this.saveToStorage(this.STATE_KEYS.selectedEventId, null);
+        this.saveToStorage(this.STATE_KEYS.eventListScroll, 0);
 
         if (!sessionId) return;
         await this.loadEvents(sessionId);
     }
 }
 
-// Initialize on page load
+// Initialize on page load (expose globally for debugging)
 document.addEventListener('DOMContentLoaded', () => {
-    new LogViewer();
+    window.logViewer = new LogViewer();
 });
