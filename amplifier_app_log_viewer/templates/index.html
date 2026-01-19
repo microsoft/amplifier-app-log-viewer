@@ -23,7 +23,13 @@
                     <option value="30d">Last 30 days</option>
                     <option value="90d">Last 90 days</option>
                     <option value="">All time</option>
+                    <option value="custom">Custom...</option>
                 </select>
+                <span id="custom-date-inputs" class="custom-date-inputs" style="display: none;">
+                    <input type="date" id="date-from" class="date-input" title="From date">
+                    <span class="date-separator">to</span>
+                    <input type="date" id="date-to" class="date-input" title="To date">
+                </span>
                 <select id="project-selector" class="selector">
                     <option value="">Select project...</option>
                 </select>

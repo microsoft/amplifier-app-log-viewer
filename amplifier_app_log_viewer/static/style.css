@@ -78,6 +78,38 @@ body {
     max-width: 140px;
 }
 
+.custom-date-inputs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.date-input {
+    padding: var(--space-1) var(--space-2);
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    border: var(--border-width-1) solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family-mono);
+    cursor: pointer;
+}
+
+.date-input:hover {
+    border-color: var(--color-border-hover);
+}
+
+.date-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+
+.date-separator {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
 .selector:hover {
     border-color: var(--color-border-hover);
 }

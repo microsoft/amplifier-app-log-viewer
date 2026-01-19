@@ -51,9 +51,17 @@ def parse_date_filter(since: str | None) -> datetime | None:
     return None
 
 
-def session_in_date_range(session, cutoff: datetime | None) -> bool:
-    """Check if a session's timestamp is within the date range."""
-    if cutoff is None:
+def session_in_date_range(
+    session, start: datetime | None, end: datetime | None = None
+) -> bool:
+    """Check if a session's timestamp is within the date range.
+
+    Args:
+        session: Session object with timestamp attribute
+        start: Start of range (inclusive), or None for no lower bound
+        end: End of range (inclusive), or None for no upper bound
+    """
+    if start is None and end is None:
         return True
 
     if not session.timestamp:
@@ -64,7 +72,12 @@ def session_in_date_range(session, cutoff: datetime | None) -> bool:
         session_dt = datetime.fromisoformat(session.timestamp.replace("Z", "+00:00"))
         if session_dt.tzinfo is None:
             session_dt = session_dt.replace(tzinfo=timezone.utc)
-        return session_dt >= cutoff
+
+        if start and session_dt < start:
+            return False
+        if end and session_dt > end:
+            return False
+        return True
     except (ValueError, AttributeError):
         return False
 
@@ -170,16 +183,19 @@ def get_projects():
     """List all projects with session counts.
 
     Query params:
-        since: Date filter - either ISO date or relative like '2d', '7d', '30d'
+        since: Start date - either ISO date or relative like '2d', '7d', '30d'
+        until: End date - ISO date string (for custom date ranges)
     """
     ensure_fresh_session_tree()
 
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
-    # Parse date filter
+    # Parse date filters
     since = request.args.get("since")
-    cutoff = parse_date_filter(since)
+    until = request.args.get("until")
+    start_date = parse_date_filter(since)
+    end_date = parse_date_filter(until)
 
     # Include scan status in response
     scan_state = session_scanner.get_scan_state()
@@ -188,9 +204,9 @@ def get_projects():
     projects_data = []
     for project in _session_tree.projects:
         # Count sessions matching date filter
-        if cutoff:
+        if start_date or end_date:
             matching_sessions = [
-                s for s in project.sessions if session_in_date_range(s, cutoff)
+                s for s in project.sessions if session_in_date_range(s, start_date, end_date)
             ]
             session_count = len(matching_sessions)
         else:
@@ -243,7 +259,8 @@ def get_sessions():
 
     Query params:
         project: Project slug (required)
-        since: Date filter - either ISO date or relative like '2d', '7d', '30d'
+        since: Start date - either ISO date or relative like '2d', '7d', '30d'
+        until: End date - ISO date string (for custom date ranges)
     """
     ensure_fresh_session_tree()
 
@@ -254,9 +271,11 @@ def get_sessions():
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
-    # Parse date filter
+    # Parse date filters
     since = request.args.get("since")
-    cutoff = parse_date_filter(since)
+    until = request.args.get("until")
+    start_date = parse_date_filter(since)
+    end_date = parse_date_filter(until)
 
     # Find project
     project = next((p for p in _session_tree.projects if p.slug == project_slug), None)
@@ -277,7 +296,7 @@ def get_sessions():
             else None,
         }
         for session in project.sessions
-        if session_in_date_range(session, cutoff)
+        if session_in_date_range(session, start_date, end_date)
     ]
 
     response = jsonify({"sessions": sessions_data})

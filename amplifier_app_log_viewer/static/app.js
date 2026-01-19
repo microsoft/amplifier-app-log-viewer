@@ -34,6 +34,9 @@ class LogViewer {
 
         // DOM elements
         this.dateRangeSelector = document.getElementById('date-range-selector');
+        this.customDateInputs = document.getElementById('custom-date-inputs');
+        this.dateFrom = document.getElementById('date-from');
+        this.dateTo = document.getElementById('date-to');
         this.projectSelector = document.getElementById('project-selector');
         this.sessionSelector = document.getElementById('session-selector');
         this.refreshBtn = document.getElementById('refresh-btn');
@@ -89,6 +92,8 @@ class LogViewer {
 
         // Setup event listeners
         this.dateRangeSelector.addEventListener('change', () => this.onDateRangeChange());
+        this.dateFrom.addEventListener('change', () => this.onCustomDateChange());
+        this.dateTo.addEventListener('change', () => this.onCustomDateChange());
         this.projectSelector.addEventListener('change', () => this.onProjectChange());
         this.sessionSelector.addEventListener('change', () => this.onSessionChange());
         this.refreshBtn.addEventListener('click', () => this.refresh());
@@ -164,20 +169,84 @@ class LogViewer {
 
     restoreDateRange() {
         // Default to '2d' (last 2 days) if no saved preference
-        const dateRange = this.loadFromStorage(this.STATE_KEYS.dateRange, '2d');
-        this.dateRangeSelector.value = dateRange;
+        const saved = this.loadFromStorage(this.STATE_KEYS.dateRange, { preset: '2d' });
+        
+        // Handle legacy string format (just the preset value)
+        if (typeof saved === 'string') {
+            this.dateRangeSelector.value = saved;
+            this.updateCustomDateVisibility();
+            return;
+        }
+        
+        // New object format with preset and custom dates
+        this.dateRangeSelector.value = saved.preset || '2d';
+        if (saved.preset === 'custom' && saved.from && saved.to) {
+            this.dateFrom.value = saved.from;
+            this.dateTo.value = saved.to;
+        }
+        this.updateCustomDateVisibility();
     }
 
     onDateRangeChange() {
-        // Save the new date range preference
-        this.saveToStorage(this.STATE_KEYS.dateRange, this.dateRangeSelector.value);
-        // Reload projects with new date filter (this will cascade to sessions)
-        this.loadProjects();
+        const preset = this.dateRangeSelector.value;
+        
+        // Show/hide custom date inputs
+        this.updateCustomDateVisibility();
+        
+        if (preset === 'custom') {
+            // Set default custom range to last 7 days if not already set
+            if (!this.dateFrom.value || !this.dateTo.value) {
+                const today = new Date();
+                const weekAgo = new Date(today);
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                this.dateTo.value = today.toISOString().split('T')[0];
+                this.dateFrom.value = weekAgo.toISOString().split('T')[0];
+            }
+            this.saveCustomDateState();
+            this.loadProjects();
+        } else {
+            // Save preset and reload
+            this.saveToStorage(this.STATE_KEYS.dateRange, { preset });
+            this.loadProjects();
+        }
     }
 
-    getDateRangeParam() {
-        // Return the current date range filter value for API calls
-        return this.dateRangeSelector.value || '';
+    onCustomDateChange() {
+        // Only trigger reload if both dates are set
+        if (this.dateFrom.value && this.dateTo.value) {
+            this.saveCustomDateState();
+            this.loadProjects();
+        }
+    }
+
+    saveCustomDateState() {
+        this.saveToStorage(this.STATE_KEYS.dateRange, {
+            preset: 'custom',
+            from: this.dateFrom.value,
+            to: this.dateTo.value
+        });
+    }
+
+    updateCustomDateVisibility() {
+        const isCustom = this.dateRangeSelector.value === 'custom';
+        this.customDateInputs.style.display = isCustom ? 'flex' : 'none';
+    }
+
+    getDateRangeParams() {
+        // Return object with since/until params for API calls
+        const preset = this.dateRangeSelector.value;
+        
+        if (preset === 'custom') {
+            return {
+                since: this.dateFrom.value || '',
+                until: this.dateTo.value || ''
+            };
+        }
+        
+        return {
+            since: preset || '',
+            until: ''
+        };
     }
 
     restoreActiveTab() {
@@ -301,8 +370,12 @@ class LogViewer {
 
     async loadProjects() {
         try {
-            const dateRange = this.getDateRangeParam();
-            const url = dateRange ? `/api/projects?since=${dateRange}` : '/api/projects';
+            const { since, until } = this.getDateRangeParams();
+            let url = '/api/projects';
+            const params = [];
+            if (since) params.push(`since=${since}`);
+            if (until) params.push(`until=${until}`);
+            if (params.length) url += '?' + params.join('&');
             const response = await fetch(url);
             const data = await response.json();
             this.projects = data.projects || [];
@@ -339,9 +412,10 @@ class LogViewer {
         }
 
         try {
-            const dateRange = this.getDateRangeParam();
+            const { since, until } = this.getDateRangeParams();
             let url = `/api/sessions?project=${projectSlug}`;
-            if (dateRange) url += `&since=${dateRange}`;
+            if (since) url += `&since=${since}`;
+            if (until) url += `&until=${until}`;
             const response = await fetch(url);
             const data = await response.json();
             this.sessions = data.sessions || [];
@@ -759,8 +833,12 @@ class LogViewer {
     async refreshProjectList() {
         // Refresh project list when dropdown is opened (focused)
         try {
-            const dateRange = this.getDateRangeParam();
-            const url = dateRange ? `/api/projects?since=${dateRange}` : '/api/projects';
+            const { since, until } = this.getDateRangeParams();
+            let url = '/api/projects';
+            const params = [];
+            if (since) params.push(`since=${since}`);
+            if (until) params.push(`until=${until}`);
+            if (params.length) url += '?' + params.join('&');
             const response = await fetch(url);
             const data = await response.json();
             const newProjects = data.projects || [];
@@ -795,9 +873,10 @@ class LogViewer {
         if (!projectSlug) return;
 
         try {
-            const dateRange = this.getDateRangeParam();
+            const { since, until } = this.getDateRangeParams();
             let url = `/api/sessions?project=${projectSlug}`;
-            if (dateRange) url += `&since=${dateRange}`;
+            if (since) url += `&since=${since}`;
+            if (until) url += `&until=${until}`;
             const response = await fetch(url);
             const data = await response.json();
             const newSessions = data.sessions || [];
