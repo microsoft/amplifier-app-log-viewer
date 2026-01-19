@@ -122,6 +122,7 @@ def get_projects():
     # Include scan status in response
     scan_state = session_scanner.get_scan_state()
 
+    # Filter out projects with zero sessions
     projects_data = [
         {
             "slug": project.slug,
@@ -129,6 +130,7 @@ def get_projects():
             "session_count": len(project.sessions),
         }
         for project in _session_tree.projects
+        if len(project.sessions) > 0
     ]
 
     response = jsonify(
