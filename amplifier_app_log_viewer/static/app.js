@@ -340,29 +340,32 @@ class LogViewer {
 
     /**
      * Format session display text for dropdowns.
-     * Shows session name if available, otherwise falls back to short ID.
+     * Always shows short ID (for sorting/identification), plus name if available.
      */
     formatSessionDisplay(session) {
-        let displayText = '';
+        const shortId = session.id.substring(0, 8);
+        const parts = session.id.split('-');
+        
+        // Build ID portion
+        let idPart = '';
+        if (parts.length > 5) {
+            // Sub-agent session: show short ID + agent name
+            const agentPart = parts.slice(5).join('-');
+            idPart = `${shortId}... [${agentPart}]`;
+        } else {
+            // Parent session: show short ID
+            idPart = shortId;
+        }
 
-        // Primary display: session name or fallback to ID
+        // Build display text: ID first (for sorting), then name if present
+        let displayText = idPart;
+        
         if (session.name) {
             // Truncate long names
-            displayText = session.name.length > 40
-                ? session.name.substring(0, 37) + '...'
+            const name = session.name.length > 35
+                ? session.name.substring(0, 32) + '...'
                 : session.name;
-        } else {
-            // Fallback to ID-based display
-            const parts = session.id.split('-');
-            if (parts.length > 5) {
-                // Sub-agent session: show short ID + agent name
-                const shortId = session.id.substring(0, 8);
-                const agentPart = parts.slice(5).join('-');
-                displayText = `${shortId}... [${agentPart}]`;
-            } else {
-                // Parent session: show short ID
-                displayText = session.id.substring(0, 8) + '...';
-            }
+            displayText += ` - ${name}`;
         }
 
         // Add timestamp
