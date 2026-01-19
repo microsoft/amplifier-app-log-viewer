@@ -15,7 +15,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart={executable} serve --port {port} --projects-dir {projects_dir}
+ExecStart={executable} serve --port {port} --host {host} --projects-dir {projects_dir}
 Restart=on-failure
 RestartSec=10
 Environment=HOME={home}
@@ -34,14 +34,22 @@ class SystemdServiceManager(ServiceManager):
 
     @property
     def service_file_path(self) -> Path:
-        return Path.home() / ".config" / "systemd" / "user" / f"{self.SERVICE_NAME}.service"
+        return (
+            Path.home()
+            / ".config"
+            / "systemd"
+            / "user"
+            / f"{self.SERVICE_NAME}.service"
+        )
 
     @property
     def log_file_path(self) -> Path:
         # systemd uses journald, no separate log file
         return Path("/dev/null")
 
-    def _run_systemctl(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    def _run_systemctl(
+        self, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess:
         """Run a systemctl --user command."""
         cmd = ["systemctl", "--user", *args]
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
@@ -91,6 +99,7 @@ class SystemdServiceManager(ServiceManager):
         content = SYSTEMD_SERVICE_TEMPLATE.format(
             executable=executable,
             port=self.port,
+            host=self.host,
             projects_dir=self.projects_dir,
             home=Path.home(),
         )
@@ -145,7 +154,9 @@ class SystemdServiceManager(ServiceManager):
                 message="Service not installed. Run 'amplifier-log-viewer service install' first.",
             )
 
-        result = self._run_systemctl("start", f"{self.SERVICE_NAME}.service", check=False)
+        result = self._run_systemctl(
+            "start", f"{self.SERVICE_NAME}.service", check=False
+        )
 
         if result.returncode != 0:
             return ServiceInfo(
@@ -164,7 +175,9 @@ class SystemdServiceManager(ServiceManager):
                 message="Service not installed.",
             )
 
-        result = self._run_systemctl("stop", f"{self.SERVICE_NAME}.service", check=False)
+        result = self._run_systemctl(
+            "stop", f"{self.SERVICE_NAME}.service", check=False
+        )
 
         if result.returncode != 0:
             return ServiceInfo(

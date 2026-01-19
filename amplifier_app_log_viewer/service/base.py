@@ -34,15 +34,22 @@ class ServiceManager(ABC):
 
     SERVICE_NAME = "amplifier-log-viewer"
 
-    def __init__(self, port: int = 8180, projects_dir: Path | None = None):
+    def __init__(
+        self,
+        port: int = 8180,
+        projects_dir: Path | None = None,
+        host: str = "127.0.0.1",
+    ):
         """Initialize service manager.
 
         Args:
             port: Port for the web server
             projects_dir: Path to Amplifier projects directory
+            host: Host to bind to (use 0.0.0.0 for network access)
         """
         self.port = port
         self.projects_dir = projects_dir or Path.home() / ".amplifier" / "projects"
+        self.host = host
 
     @property
     @abstractmethod
@@ -149,12 +156,15 @@ class ServiceManager(ABC):
         )
 
 
-def get_service_manager(port: int = 8180, projects_dir: Path | None = None) -> ServiceManager:
+def get_service_manager(
+    port: int = 8180, projects_dir: Path | None = None, host: str = "127.0.0.1"
+) -> ServiceManager:
     """Get the appropriate service manager for the current platform.
 
     Args:
         port: Port for the web server
         projects_dir: Path to Amplifier projects directory
+        host: Host to bind to (use 0.0.0.0 for network access)
 
     Returns:
         ServiceManager instance for the current platform
@@ -167,11 +177,11 @@ def get_service_manager(port: int = 8180, projects_dir: Path | None = None) -> S
     if system == "Darwin":
         from .launchd import LaunchdServiceManager
 
-        return LaunchdServiceManager(port=port, projects_dir=projects_dir)
+        return LaunchdServiceManager(port=port, projects_dir=projects_dir, host=host)
     elif system == "Linux":
         from .systemd import SystemdServiceManager
 
-        return SystemdServiceManager(port=port, projects_dir=projects_dir)
+        return SystemdServiceManager(port=port, projects_dir=projects_dir, host=host)
     else:
         raise NotImplementedError(
             f"Service mode is not supported on {system}. "

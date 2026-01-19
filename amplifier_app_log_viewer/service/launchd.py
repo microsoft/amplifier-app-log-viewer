@@ -45,7 +45,9 @@ class LaunchdServiceManager(ServiceManager):
         """Get the launchd service target for the current user."""
         return f"{self._get_domain_target()}/{self.label}"
 
-    def _run_launchctl(self, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+    def _run_launchctl(
+        self, *args: str, check: bool = False
+    ) -> subprocess.CompletedProcess:
         """Run a launchctl command."""
         cmd = ["launchctl", *args]
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
@@ -61,6 +63,8 @@ class LaunchdServiceManager(ServiceManager):
                 "serve",
                 "--port",
                 str(self.port),
+                "--host",
+                self.host,
                 "--projects-dir",
                 str(self.projects_dir),
             ],
@@ -149,7 +153,10 @@ class LaunchdServiceManager(ServiceManager):
 
         # If already bootstrapped, try kickstart instead
         if result.returncode != 0:
-            if "already bootstrapped" in result.stderr.lower() or "already loaded" in result.stderr.lower():
+            if (
+                "already bootstrapped" in result.stderr.lower()
+                or "already loaded" in result.stderr.lower()
+            ):
                 # Service is loaded, try to kickstart it
                 result = self._run_launchctl(
                     "kickstart",
@@ -165,6 +172,7 @@ class LaunchdServiceManager(ServiceManager):
 
         # Give it a moment to start
         import time
+
         time.sleep(1)
 
         return self.status()
@@ -271,7 +279,7 @@ class LaunchdServiceManager(ServiceManager):
         else:
             # Just show last N lines
             cmd = ["tail", "-n", str(lines), str(self.log_file_path)]
-            result = subprocess.run(cmd, check=False)
+            subprocess.run(cmd, check=False)
 
             # Also show error log if it exists and has content
             if self.error_log_path.exists() and self.error_log_path.stat().st_size > 0:

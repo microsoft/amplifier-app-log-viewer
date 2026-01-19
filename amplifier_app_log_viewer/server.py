@@ -20,7 +20,9 @@ app = Flask(__name__)
 _session_tree = None
 _projects_dir = None
 _last_scan_time = 0
-_cache_duration = 3  # Seconds before auto-refresh (reduced for better UX)
+_cache_duration = (
+    30  # Seconds before auto-refresh (increased - incremental scans are fast)
+)
 
 
 def create_app(projects_dir: str | Path | None = None) -> Flask:
@@ -52,19 +54,26 @@ def init_session_tree(projects_dir: Path):
 
 
 def refresh_session_tree():
-    """Refresh session tree by rescanning projects directory."""
+    """Refresh session tree by rescanning projects directory (incremental)."""
     global _session_tree, _last_scan_time
     if _projects_dir is None:
         raise RuntimeError("Projects directory not initialized")
 
     amplifier_home = _projects_dir.parent
-    _session_tree = session_scanner.scan_projects(amplifier_home)
+
+    # Pass existing tree for incremental scanning
+    _session_tree = session_scanner.scan_projects(amplifier_home, _session_tree)
     _last_scan_time = time.time()
 
-    # Log refresh for debugging
+    # Log refresh with incremental stats
+    scan_state = session_scanner.get_scan_state()
     project_count = len(_session_tree.projects)
     session_count = len(_session_tree.session_index)
-    print(f"[Refresh] Scanned projects directory: {project_count} projects, {session_count} sessions")
+    print(
+        f"[Refresh] {project_count} projects, {session_count} sessions "
+        f"(scanned: {scan_state.sessions_scanned}, cached: {scan_state.sessions_cached}, "
+        f"took {scan_state.last_scan_duration:.2f}s)"
+    )
 
 
 def ensure_fresh_session_tree():
@@ -74,7 +83,6 @@ def ensure_fresh_session_tree():
 
     time_since_scan = time.time() - _last_scan_time
     if time_since_scan > _cache_duration:
-        print(f"[Auto-refresh] Cache expired ({time_since_scan:.1f}s > {_cache_duration}s), rescanning...")
         refresh_session_tree()
 
 
@@ -82,6 +90,25 @@ def ensure_fresh_session_tree():
 def index():
     """Serve main HTML page."""
     return render_template("index.html")
+
+
+@app.route("/api/status")
+def get_status():
+    """Get server and scan status."""
+    scan_state = session_scanner.get_scan_state()
+
+    return jsonify(
+        {
+            "is_scanning": scan_state.is_scanning,
+            "last_scan_duration": scan_state.last_scan_duration,
+            "sessions_scanned": scan_state.sessions_scanned,
+            "sessions_cached": scan_state.sessions_cached,
+            "project_count": len(_session_tree.projects) if _session_tree else 0,
+            "session_count": len(_session_tree.session_index) if _session_tree else 0,
+            "cache_age": time.time() - _last_scan_time if _last_scan_time else 0,
+            "cache_duration": _cache_duration,
+        }
+    )
 
 
 @app.route("/api/projects")
@@ -92,6 +119,9 @@ def get_projects():
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
+    # Include scan status in response
+    scan_state = session_scanner.get_scan_state()
+
     projects_data = [
         {
             "slug": project.slug,
@@ -101,7 +131,12 @@ def get_projects():
         for project in _session_tree.projects
     ]
 
-    response = jsonify({"projects": projects_data})
+    response = jsonify(
+        {
+            "projects": projects_data,
+            "is_scanning": scan_state.is_scanning,
+        }
+    )
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -113,7 +148,16 @@ def refresh():
     """Manually refresh the session tree."""
     try:
         refresh_session_tree()
-        return jsonify({"status": "success", "message": "Session tree refreshed"})
+        scan_state = session_scanner.get_scan_state()
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Session tree refreshed",
+                "sessions_scanned": scan_state.sessions_scanned,
+                "sessions_cached": scan_state.sessions_cached,
+                "duration": scan_state.last_scan_duration,
+            }
+        )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -154,9 +198,57 @@ def get_sessions():
     return response
 
 
+@app.route("/api/events/list")
+def get_event_list():
+    """Get lightweight event list for a session (no payloads).
+
+    Returns only metadata needed for list display: line number, timestamp,
+    event type, level, preview text, and size. Full event data is fetched
+    on-demand via /api/events/<session_id>/<line_num>.
+    """
+    session_id = request.args.get("session")
+    if not session_id:
+        return jsonify({"error": "Missing 'session' parameter"}), 400
+
+    if not _session_tree:
+        return jsonify({"error": "Session tree not initialized"}), 500
+
+    session = session_scanner.get_session(session_id, _session_tree)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    events = log_reader.read_event_list(session.events_path)
+
+    return jsonify({"events": events, "total": len(events)})
+
+
+@app.route("/api/events/<session_id>/<int:line_num>")
+def get_event_detail(session_id: str, line_num: int):
+    """Get full event detail by line number.
+
+    Returns the complete event payload for display in the detail panel.
+    """
+    if not _session_tree:
+        return jsonify({"error": "Session tree not initialized"}), 500
+
+    session = session_scanner.get_session(session_id, _session_tree)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    event = log_reader.read_single_event(session.events_path, line_num)
+    if not event:
+        return jsonify({"error": "Event not found"}), 404
+
+    return jsonify(event)
+
+
 @app.route("/api/events")
 def get_events():
-    """Get paginated events for a session."""
+    """Get paginated events for a session (DEPRECATED).
+
+    Use /api/events/list for the event list and /api/events/<session>/<line>
+    for full event details instead.
+    """
     session_id = request.args.get("session")
     if not session_id:
         return jsonify({"error": "Missing 'session' parameter"}), 400
@@ -176,7 +268,7 @@ def get_events():
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    # Read events
+    # Read events (deprecated path - kept for compatibility)
     events, total = log_reader.read_events(session.events_path, offset, limit)
 
     return jsonify(
@@ -234,10 +326,12 @@ def stream_events(session_id: str):
 
         while True:
             # Check for new events
-            new_events, last_position = log_reader.tail_events(session.events_path, last_position)
+            new_events, last_position = log_reader.tail_events(
+                session.events_path, last_position
+            )
 
             if new_events:
-                # Send SSE message
+                # Send lightweight events (tail_events already returns lightweight format)
                 data = json.dumps(new_events)
                 yield f"event: new_events\ndata: {data}\n\n"
 
@@ -260,7 +354,7 @@ def run_server(projects_dir: Path, port: int = 8180):
 
     # Show helpful message if no projects found
     if not _session_tree or not _session_tree.projects:
-        print("\nℹ️  No Amplifier projects found yet.")
+        print("\nNo Amplifier projects found yet.")
         print("   Run Amplifier at least once to create session logs.")
         print(f"   Logs will appear in: {projects_dir}\n")
 

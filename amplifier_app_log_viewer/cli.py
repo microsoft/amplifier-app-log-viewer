@@ -15,8 +15,13 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".amplifier" / "projects"
     default=DEFAULT_PROJECTS_DIR,
     help="Path to Amplifier projects directory",
 )
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind to (use 0.0.0.0 for network access)",
+)
 @click.pass_context
-def cli(ctx: click.Context, port: int, projects_dir: Path) -> None:
+def cli(ctx: click.Context, port: int, projects_dir: Path, host: str) -> None:
     """Amplifier Log Viewer - Web-based session log viewer.
 
     Run without a command to start the server in foreground mode.
@@ -25,10 +30,11 @@ def cli(ctx: click.Context, port: int, projects_dir: Path) -> None:
     ctx.ensure_object(dict)
     ctx.obj["port"] = port
     ctx.obj["projects_dir"] = projects_dir
+    ctx.obj["host"] = host
 
     # If no subcommand, run the server (backwards compatible)
     if ctx.invoked_subcommand is None:
-        ctx.invoke(serve, port=port, projects_dir=projects_dir)
+        ctx.invoke(serve, port=port, projects_dir=projects_dir, host=host)
 
 
 @cli.command()
@@ -50,10 +56,10 @@ def serve(port: int, projects_dir: Path, host: str) -> None:
 
     app = create_app(str(projects_dir))
 
-    click.echo(f"Starting Amplifier Log Viewer...")
+    click.echo("Starting Amplifier Log Viewer...")
     click.echo(f"  URL: http://{host}:{port}")
     click.echo(f"  Projects: {projects_dir}")
-    click.echo(f"  Press Ctrl+C to stop\n")
+    click.echo("  Press Ctrl+C to stop\n")
 
     app.run(host=host, port=port, debug=False, threaded=True)
 
@@ -81,17 +87,26 @@ def service(ctx: click.Context) -> None:
     default=DEFAULT_PROJECTS_DIR,
     help="Path to Amplifier projects directory",
 )
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind to (use 0.0.0.0 for network access)",
+)
 @click.pass_context
-def service_install(ctx: click.Context, port: int, projects_dir: Path) -> None:
+def service_install(
+    ctx: click.Context, port: int, projects_dir: Path, host: str
+) -> None:
     """Install as a background service."""
     from .service import ServiceStatus, get_service_manager
 
     try:
-        manager = get_service_manager(port=port, projects_dir=projects_dir)
+        manager = get_service_manager(port=port, projects_dir=projects_dir, host=host)
     except NotImplementedError as e:
         raise click.ClickException(str(e))
 
-    click.echo(f"Installing amplifier-log-viewer as a {manager.platform_name} service...")
+    click.echo(
+        f"Installing amplifier-log-viewer as a {manager.platform_name} service..."
+    )
 
     result = manager.install()
 
@@ -247,10 +262,10 @@ def service_status(ctx: click.Context) -> None:
     color, symbol = status_colors.get(result.status, ("white", "?"))
 
     click.secho(f"{symbol} ", fg=color, nl=False, bold=True)
-    click.secho(f"amplifier-log-viewer.service", bold=True, nl=False)
-    click.echo(f" - Amplifier Log Viewer")
+    click.secho("amplifier-log-viewer.service", bold=True, nl=False)
+    click.echo(" - Amplifier Log Viewer")
 
-    click.echo(f"   Status: ", nl=False)
+    click.echo("   Status: ", nl=False)
     click.secho(result.status.value, fg=color, bold=True)
 
     if result.pid:
@@ -265,7 +280,10 @@ def service_status(ctx: click.Context) -> None:
     if result.log_file and result.log_file.exists():
         click.echo(f"   Logs: {result.log_file}")
 
-    if result.message and result.status not in (ServiceStatus.RUNNING, ServiceStatus.STOPPED):
+    if result.message and result.status not in (
+        ServiceStatus.RUNNING,
+        ServiceStatus.STOPPED,
+    ):
         click.echo()
         click.echo(f"   {result.message}")
 

@@ -1,16 +1,20 @@
-// Amplifier Log Viewer - Network tab-style interface
+// Amplifier Log Viewer - Network tab-style interface with progressive loading
 
 class LogViewer {
     constructor() {
         this.projects = [];
         this.sessions = [];
-        this.events = [];
+        this.events = [];           // Lightweight event headers
         this.filteredEvents = [];
-        this.selectedEvent = null;
+        this.selectedEvent = null;  // Full event data (fetched on demand)
         this.selectedEventIndex = null;
         this.currentSessionId = null;
         this.eventStream = null;
         this.isRestoringState = false;  // Flag to prevent saving during restore
+
+        // Event detail cache: line_num -> full event data
+        this.eventCache = new Map();
+        this.EVENT_CACHE_MAX = 50;  // Keep last 50 viewed events
 
         // LocalStorage keys
         this.STORAGE_PREFIX = 'amplifier-log-viewer-';
@@ -43,6 +47,11 @@ class LogViewer {
         this.copyEventBtn = document.getElementById('copy-event-btn');
         this.copyRawBtn = document.getElementById('copy-raw-btn');
         this.closeDetailBtn = document.getElementById('close-detail-btn');
+        this.scanStatus = document.getElementById('scan-status');
+        this.scanText = this.scanStatus?.querySelector('.scan-text');
+
+        // Status polling
+        this.statusPollInterval = null;
 
         this.init();
     }
@@ -120,6 +129,9 @@ class LogViewer {
             });
         });
 
+        // Start status polling
+        this.startStatusPolling();
+
         // Copy buttons
         this.copyEventBtn.addEventListener('click', () => this.copyCurrentEvent());
         this.copyRawBtn.addEventListener('click', () => this.copyRawJson());
@@ -179,9 +191,10 @@ class LogViewer {
         }
         
         if (this.selectedEvent && this.currentSessionId) {
-            // Save by event timestamp + type + session for reliable matching across reloads
+            // Save by line number + session for reliable matching across reloads
             this.saveToStorage(this.STATE_KEYS.selectedEventId, {
                 sessionId: this.currentSessionId,
+                line: this.selectedEvent.line,
                 ts: this.selectedEvent.ts,
                 event: this.selectedEvent.event,
                 index: this.selectedEventIndex
@@ -200,10 +213,15 @@ class LogViewer {
             return;
         }
 
-        // Try to find by exact match (ts + event type)
-        let foundIndex = this.filteredEvents.findIndex(e => 
-            e.ts === saved.ts && e.event === saved.event
-        );
+        // Try to find by line number first (most reliable)
+        let foundIndex = this.filteredEvents.findIndex(e => e.line === saved.line);
+
+        // Fallback: try exact match (ts + event type)
+        if (foundIndex === -1) {
+            foundIndex = this.filteredEvents.findIndex(e => 
+                e.ts === saved.ts && e.event === saved.event
+            );
+        }
 
         // Fallback: try saved index if within bounds
         if (foundIndex === -1 && saved.index !== undefined) {
@@ -373,15 +391,19 @@ class LogViewer {
         // Clear detail panel when switching sessions
         this.closeDetail();
 
+        // Clear event cache when switching sessions
+        this.eventCache.clear();
+
         // Stop previous event stream
         if (this.eventStream) {
             this.eventStream.close();
         }
 
         try {
-            const response = await fetch(`/api/events?session=${sessionId}&limit=1000`);
+            // NEW: Load lightweight event list (no payloads)
+            const response = await fetch(`/api/events/list?session=${sessionId}`);
             const data = await response.json();
-            this.events = data.events || [];
+            this.events = data.events || [];  // Lightweight event headers
 
             // Populate dynamic filters from actual event data
             this.populateDynamicFilters();
@@ -421,6 +443,7 @@ class LogViewer {
     startEventStream(sessionId) {
         this.eventStream = new EventSource(`/stream/${sessionId}`);
         this.eventStream.addEventListener('new_events', (e) => {
+            // NEW: SSE now sends lightweight events
             const newEvents = JSON.parse(e.data);
             this.events.push(...newEvents);
             this.applyFilters();
@@ -441,10 +464,10 @@ class LogViewer {
                 if (!event.event.startsWith(typeFilter)) return false;
             }
 
-            // Text search (search in event type and data)
+            // Text search (search in event type and preview)
             if (searchText) {
-                const eventStr = JSON.stringify(event).toLowerCase();
-                if (!eventStr.includes(searchText)) return false;
+                const searchable = `${event.event} ${event.preview || ''}`.toLowerCase();
+                if (!searchable.includes(searchText)) return false;
             }
 
             return true;
@@ -509,6 +532,7 @@ class LogViewer {
         const item = document.createElement('div');
         item.className = 'event-item';
         item.dataset.index = index;
+        item.dataset.line = event.line;  // Store line number for fetching
 
         const level = event.lvl.toLowerCase();
         const levelBadge = document.createElement('span');
@@ -528,11 +552,20 @@ class LogViewer {
 
         const previewEl = document.createElement('div');
         previewEl.className = 'event-preview';
-        previewEl.textContent = this.getEventPreview(event);
+        previewEl.textContent = event.preview || '';  // Use server-computed preview
 
         content.appendChild(typeEl);
         content.appendChild(timestampEl);
         content.appendChild(previewEl);
+
+        // Show size indicator for large events (> 50KB)
+        if (event.size > 50000) {
+            const sizeIndicator = document.createElement('span');
+            sizeIndicator.className = 'event-size-indicator';
+            sizeIndicator.textContent = `${Math.round(event.size / 1024)}KB`;
+            sizeIndicator.title = 'Large event payload';
+            content.appendChild(sizeIndicator);
+        }
 
         item.appendChild(levelBadge);
         item.appendChild(content);
@@ -542,77 +575,53 @@ class LogViewer {
         return item;
     }
 
-    getEventPreview(event) {
-        if (!event.data) return '';
+    async selectEvent(index) {
+        const eventHeader = this.filteredEvents[index];
+        const lineNum = eventHeader.line;
 
-        // For LLM debug events, data is nested: event.data.data.request/response
-        if (event.event.includes(':debug')) {
-            const nestedData = event.data.data || {};
+        // Update UI immediately with what we have
+        this.selectedEventIndex = index;
+        this.highlightSelectedItem(index);
 
-            if (event.event.startsWith('llm:request')) {
-                const request = nestedData.request || {};
-                const model = request.model || '';
-                const messageCount = request.messages?.length || 0;
-                if (model && messageCount > 0) {
-                    return `${model} | ${messageCount} messages`;
-                }
-            }
-
-            if (event.event.startsWith('llm:response')) {
-                const response = nestedData.response || {};
-                const usage = response.usage || {};
-                const tokens = usage.total_tokens || usage.input_tokens || '';
-                if (tokens) {
-                    return `${tokens} tokens`;
-                }
-            }
+        // Check cache first
+        if (this.eventCache.has(lineNum)) {
+            this.selectedEvent = this.eventCache.get(lineNum);
+            this.renderEventDetail(this.selectedEvent);
+            this.saveSelectedEvent();
+            return;
         }
 
-        // For standard LLM events (not debug), check data.data for nested structure
-        if (event.event.startsWith('llm:')) {
-            const nestedData = event.data.data || event.data;
-            const provider = nestedData.provider;
-            if (provider) {
-                return `Provider: ${provider}`;
-            }
-        }
+        // Show loading state in detail panel
+        this.showDetailLoading(true);
 
-        // For tool events
-        if (event.event.startsWith('tool:')) {
-            const toolName = event.data.tool_name || event.data.name;
-            if (toolName) {
-                return `Tool: ${toolName}`;
+        try {
+            // Fetch full event by line number
+            const response = await fetch(
+                `/api/events/${this.currentSessionId}/${lineNum}`
+            );
+            
+            if (!response.ok) {
+                throw new Error('Failed to load event');
             }
-        }
+            
+            const fullEvent = await response.json();
 
-        // For prompt events
-        if (event.event.startsWith('prompt:')) {
-            const prompt = event.data.prompt;
-            if (prompt && prompt.length < 60) {
-                return prompt;
-            } else if (prompt) {
-                return prompt.substring(0, 57) + '...';
-            }
-        }
+            // Cache it
+            this.cacheEvent(lineNum, fullEvent);
 
-        // For content blocks
-        if (event.event.startsWith('content_block:')) {
-            const blockType = event.data.block_type;
-            const blockIndex = event.data.block_index;
-            if (blockType !== undefined && blockIndex !== undefined) {
-                return `Block ${blockIndex}: ${blockType}`;
-            }
+            this.selectedEvent = fullEvent;
+            this.renderEventDetail(this.selectedEvent);
+            this.saveSelectedEvent();
+        } catch (error) {
+            console.error('Failed to load event detail:', error);
+            this.showDetailError('Failed to load event details');
+        } finally {
+            this.showDetailLoading(false);
         }
-
-        // Default: empty (don't show unhelpful data)
-        return '';
     }
 
-    selectEvent(index) {
-        this.selectedEvent = this.filteredEvents[index];
-        this.selectedEventIndex = index;
-
-        // Update UI
+    highlightSelectedItem(index) {
+        // Update UI highlighting
         this.eventListContent.querySelectorAll('.event-item').forEach(item => {
             item.classList.remove('selected');
         });
@@ -620,11 +629,15 @@ class LogViewer {
         if (selectedItem) {
             selectedItem.classList.add('selected');
         }
+    }
 
-        this.renderEventDetail(this.selectedEvent);
-        
-        // Persist selected event
-        this.saveSelectedEvent();
+    cacheEvent(lineNum, event) {
+        // Simple LRU-ish: if cache is full, delete oldest entry
+        if (this.eventCache.size >= this.EVENT_CACHE_MAX) {
+            const firstKey = this.eventCache.keys().next().value;
+            this.eventCache.delete(firstKey);
+        }
+        this.eventCache.set(lineNum, event);
     }
 
     renderEventDetail(event) {
@@ -639,6 +652,7 @@ class LogViewer {
                         <tr><td>Level:</td><td>${event.lvl}</td></tr>
                         <tr><td>Timestamp:</td><td>${event.ts}</td></tr>
                         <tr><td>Session ID:</td><td>${event.session_id?.substring(0, 8)}...</td></tr>
+                        <tr><td>Line Number:</td><td>${event.line}</td></tr>
                     </table>
                 </div>
                 <div class="overview-section">
@@ -850,6 +864,22 @@ class LogViewer {
         indicator.style.display = show ? 'block' : 'none';
     }
 
+    showDetailLoading(show) {
+        const overviewTab = document.getElementById('overview-tab');
+        if (show) {
+            overviewTab.innerHTML = '<div class="detail-content loading"><p>Loading event details...</p></div>';
+            this.dataViewer.innerHTML = '<div class="loading-placeholder">Loading...</div>';
+            this.rawJson.textContent = 'Loading...';
+        }
+    }
+
+    showDetailError(message) {
+        const overviewTab = document.getElementById('overview-tab');
+        overviewTab.innerHTML = `<div class="detail-content error"><p>${message}</p></div>`;
+        this.dataViewer.innerHTML = '';
+        this.rawJson.textContent = '';
+    }
+
     showError(message) {
         this.eventListContent.innerHTML = `
             <div class="welcome-message">
@@ -861,6 +891,37 @@ class LogViewer {
     showNotification(message) {
         // Simple notification (could be enhanced)
         console.log(message);
+    }
+
+    // Status polling for scan indicator
+    startStatusPolling() {
+        // Poll every 500ms to catch scan status changes
+        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 500);
+    }
+
+    async checkScanStatus() {
+        try {
+            const response = await fetch('/api/status');
+            const status = await response.json();
+            this.updateScanIndicator(status);
+        } catch (error) {
+            // Silently ignore status check errors
+        }
+    }
+
+    updateScanIndicator(status) {
+        if (!this.scanStatus) return;
+
+        if (status.is_scanning) {
+            this.scanStatus.style.display = 'flex';
+            this.refreshBtn.classList.add('scanning');
+            if (this.scanText) {
+                this.scanText.textContent = 'Scanning...';
+            }
+        } else {
+            this.scanStatus.style.display = 'none';
+            this.refreshBtn.classList.remove('scanning');
+        }
     }
 
     async onProjectChange() {
