@@ -117,9 +117,11 @@ class SystemdServiceManager(ServiceManager):
             status=ServiceStatus.STOPPED,
             service_file=self.service_file_path,
             port=self.port,
+            host=self.host,
             message=(
                 f"Service installed successfully.\n"
                 f"Service file: {self.service_file_path}\n"
+                f"Host: {self.host}\n"
                 f"Port: {self.port}\n\n"
                 f"To start: amplifier-log-viewer service start\n"
                 f"To enable auto-start at boot: sudo loginctl enable-linger $USER"
@@ -190,6 +192,38 @@ class SystemdServiceManager(ServiceManager):
             message="Service stopped.",
         )
 
+    def _parse_service_config(self) -> tuple[str, int]:
+        """Parse host and port from the installed service file.
+
+        Returns:
+            Tuple of (host, port) parsed from ExecStart line
+        """
+        host = "127.0.0.1"
+        port = 8180
+
+        if not self.service_file_path.exists():
+            return host, port
+
+        try:
+            content = self.service_file_path.read_text()
+            for line in content.split("\n"):
+                if line.startswith("ExecStart="):
+                    # Parse --host and --port from ExecStart line
+                    import re
+
+                    host_match = re.search(r"--host\s+(\S+)", line)
+                    if host_match:
+                        host = host_match.group(1)
+
+                    port_match = re.search(r"--port\s+(\d+)", line)
+                    if port_match:
+                        port = int(port_match.group(1))
+                    break
+        except OSError:
+            pass
+
+        return host, port
+
     def status(self) -> ServiceInfo:
         """Get the current service status."""
         if not self.service_file_path.exists():
@@ -198,6 +232,9 @@ class SystemdServiceManager(ServiceManager):
                 service_file=None,
                 message="Service not installed.",
             )
+
+        # Parse config from service file
+        configured_host, configured_port = self._parse_service_config()
 
         # Get service status
         result = self._run_systemctl(
@@ -239,12 +276,17 @@ class SystemdServiceManager(ServiceManager):
 
         message = f"State: {active_state} ({sub_state})"
         if status == ServiceStatus.RUNNING:
-            message += f"\nURL: http://localhost:{self.port}"
+            # Show appropriate URL based on configured host
+            if configured_host == "0.0.0.0":
+                message += f"\nURL: http://<host>:{configured_port} (listening on all interfaces)"
+            else:
+                message += f"\nURL: http://{configured_host}:{configured_port}"
 
         return ServiceInfo(
             status=status,
             pid=pid,
-            port=self.port if status == ServiceStatus.RUNNING else None,
+            port=configured_port if status == ServiceStatus.RUNNING else None,
+            host=configured_host if status == ServiceStatus.RUNNING else None,
             service_file=self.service_file_path,
             message=message,
         )

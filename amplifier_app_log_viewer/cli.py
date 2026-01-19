@@ -271,8 +271,11 @@ def service_status(ctx: click.Context) -> None:
     if result.pid:
         click.echo(f"   PID: {result.pid}")
 
-    if result.port and result.status == ServiceStatus.RUNNING:
-        click.echo(f"   URL: http://localhost:{result.port}")
+    if result.status == ServiceStatus.RUNNING and result.port:
+        if result.host == "0.0.0.0":
+            click.echo(f"   Listening: {result.host}:{result.port} (all interfaces)")
+        else:
+            click.echo(f"   URL: http://{result.host or 'localhost'}:{result.port}")
 
     if result.service_file:
         click.echo(f"   Config: {result.service_file}")

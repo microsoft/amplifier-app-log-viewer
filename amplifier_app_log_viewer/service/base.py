@@ -24,6 +24,7 @@ class ServiceInfo:
     status: ServiceStatus
     pid: int | None = None
     port: int | None = None
+    host: str | None = None
     service_file: Path | None = None
     log_file: Path | None = None
     message: str | None = None
