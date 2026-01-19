@@ -93,6 +93,14 @@ body {
     font-size: var(--font-size-sm);
     font-family: var(--font-family-mono);
     cursor: pointer;
+    /* Make calendar icon visible on dark backgrounds */
+    color-scheme: dark;
+}
+
+/* Style the calendar icon for WebKit browsers */
+.date-input::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    cursor: pointer;
 }
 
 .date-input:hover {
