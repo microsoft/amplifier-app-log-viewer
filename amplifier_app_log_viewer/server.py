@@ -2,6 +2,9 @@
 
 import json
 import time
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 from flask import Flask
@@ -13,6 +16,57 @@ from flask import stream_with_context
 
 from . import log_reader
 from . import session_scanner
+
+
+def parse_date_filter(since: str | None) -> datetime | None:
+    """Parse date filter parameter into a datetime cutoff.
+
+    Args:
+        since: Either an ISO date string or a relative period like '2d', '7d', '30d'
+
+    Returns:
+        datetime cutoff (UTC) or None if no filter
+    """
+    if not since:
+        return None
+
+    # Handle relative periods
+    if since.endswith("d"):
+        try:
+            days = int(since[:-1])
+            return datetime.now(timezone.utc) - timedelta(days=days)
+        except ValueError:
+            pass
+
+    # Handle ISO date strings
+    try:
+        # Try parsing as ISO format
+        dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        pass
+
+    return None
+
+
+def session_in_date_range(session, cutoff: datetime | None) -> bool:
+    """Check if a session's timestamp is within the date range."""
+    if cutoff is None:
+        return True
+
+    if not session.timestamp:
+        # Sessions without timestamps are excluded when filtering
+        return False
+
+    try:
+        session_dt = datetime.fromisoformat(session.timestamp.replace("Z", "+00:00"))
+        if session_dt.tzinfo is None:
+            session_dt = session_dt.replace(tzinfo=timezone.utc)
+        return session_dt >= cutoff
+    except (ValueError, AttributeError):
+        return False
 
 app = Flask(__name__)
 
@@ -113,25 +167,44 @@ def get_status():
 
 @app.route("/api/projects")
 def get_projects():
-    """List all projects with session counts."""
+    """List all projects with session counts.
+
+    Query params:
+        since: Date filter - either ISO date or relative like '2d', '7d', '30d'
+    """
     ensure_fresh_session_tree()
 
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
+    # Parse date filter
+    since = request.args.get("since")
+    cutoff = parse_date_filter(since)
+
     # Include scan status in response
     scan_state = session_scanner.get_scan_state()
 
-    # Filter out projects with zero sessions
-    projects_data = [
-        {
-            "slug": project.slug,
-            "path": str(project.path),
-            "session_count": len(project.sessions),
-        }
-        for project in _session_tree.projects
-        if len(project.sessions) > 0
-    ]
+    # Build projects list with filtered session counts
+    projects_data = []
+    for project in _session_tree.projects:
+        # Count sessions matching date filter
+        if cutoff:
+            matching_sessions = [
+                s for s in project.sessions if session_in_date_range(s, cutoff)
+            ]
+            session_count = len(matching_sessions)
+        else:
+            session_count = len(project.sessions)
+
+        # Only include projects with sessions in the date range
+        if session_count > 0:
+            projects_data.append(
+                {
+                    "slug": project.slug,
+                    "path": str(project.path),
+                    "session_count": session_count,
+                }
+            )
 
     response = jsonify(
         {
@@ -166,7 +239,12 @@ def refresh():
 
 @app.route("/api/sessions")
 def get_sessions():
-    """List sessions for a project."""
+    """List sessions for a project.
+
+    Query params:
+        project: Project slug (required)
+        since: Date filter - either ISO date or relative like '2d', '7d', '30d'
+    """
     ensure_fresh_session_tree()
 
     project_slug = request.args.get("project")
@@ -176,12 +254,16 @@ def get_sessions():
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
+    # Parse date filter
+    since = request.args.get("since")
+    cutoff = parse_date_filter(since)
+
     # Find project
     project = next((p for p in _session_tree.projects if p.slug == project_slug), None)
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    # Build session data
+    # Filter sessions by date and build response data
     sessions_data = [
         {
             "id": session.id,
@@ -195,6 +277,7 @@ def get_sessions():
             else None,
         }
         for session in project.sessions
+        if session_in_date_range(session, cutoff)
     ]
 
     response = jsonify({"sessions": sessions_data})

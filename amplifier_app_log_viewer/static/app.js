@@ -29,9 +29,11 @@ class LogViewer {
             selectedEventId: 'selectedEventId',
             eventListScroll: 'eventListScroll',
             detailPanelScroll: 'detailPanelScroll',
+            dateRange: 'dateRange',
         };
 
         // DOM elements
+        this.dateRangeSelector = document.getElementById('date-range-selector');
         this.projectSelector = document.getElementById('project-selector');
         this.sessionSelector = document.getElementById('session-selector');
         this.refreshBtn = document.getElementById('refresh-btn');
@@ -77,6 +79,7 @@ class LogViewer {
 
     init() {
         // Restore all persisted state from localStorage
+        this.restoreDateRange();
         this.restoreFilterState();
         this.restoreSortPreference();
         this.restoreActiveTab();
@@ -85,6 +88,7 @@ class LogViewer {
         this.loadProjects();
 
         // Setup event listeners
+        this.dateRangeSelector.addEventListener('change', () => this.onDateRangeChange());
         this.projectSelector.addEventListener('change', () => this.onProjectChange());
         this.sessionSelector.addEventListener('change', () => this.onSessionChange());
         this.refreshBtn.addEventListener('click', () => this.refresh());
@@ -156,6 +160,24 @@ class LogViewer {
     restoreSortPreference() {
         const sortByTimestamp = this.loadFromStorage(this.STATE_KEYS.sortByTimestamp, false);
         this.sortByTimestampCheckbox.checked = sortByTimestamp;
+    }
+
+    restoreDateRange() {
+        // Default to '2d' (last 2 days) if no saved preference
+        const dateRange = this.loadFromStorage(this.STATE_KEYS.dateRange, '2d');
+        this.dateRangeSelector.value = dateRange;
+    }
+
+    onDateRangeChange() {
+        // Save the new date range preference
+        this.saveToStorage(this.STATE_KEYS.dateRange, this.dateRangeSelector.value);
+        // Reload projects with new date filter (this will cascade to sessions)
+        this.loadProjects();
+    }
+
+    getDateRangeParam() {
+        // Return the current date range filter value for API calls
+        return this.dateRangeSelector.value || '';
     }
 
     restoreActiveTab() {
@@ -279,7 +301,9 @@ class LogViewer {
 
     async loadProjects() {
         try {
-            const response = await fetch('/api/projects');
+            const dateRange = this.getDateRangeParam();
+            const url = dateRange ? `/api/projects?since=${dateRange}` : '/api/projects';
+            const response = await fetch(url);
             const data = await response.json();
             this.projects = data.projects || [];
 
@@ -315,7 +339,10 @@ class LogViewer {
         }
 
         try {
-            const response = await fetch(`/api/sessions?project=${projectSlug}`);
+            const dateRange = this.getDateRangeParam();
+            let url = `/api/sessions?project=${projectSlug}`;
+            if (dateRange) url += `&since=${dateRange}`;
+            const response = await fetch(url);
             const data = await response.json();
             this.sessions = data.sessions || [];
 
@@ -732,7 +759,9 @@ class LogViewer {
     async refreshProjectList() {
         // Refresh project list when dropdown is opened (focused)
         try {
-            const response = await fetch('/api/projects');
+            const dateRange = this.getDateRangeParam();
+            const url = dateRange ? `/api/projects?since=${dateRange}` : '/api/projects';
+            const response = await fetch(url);
             const data = await response.json();
             const newProjects = data.projects || [];
 
@@ -766,7 +795,10 @@ class LogViewer {
         if (!projectSlug) return;
 
         try {
-            const response = await fetch(`/api/sessions?project=${projectSlug}`);
+            const dateRange = this.getDateRangeParam();
+            let url = `/api/sessions?project=${projectSlug}`;
+            if (dateRange) url += `&since=${dateRange}`;
+            const response = await fetch(url);
             const data = await response.json();
             const newSessions = data.sessions || [];
 

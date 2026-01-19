@@ -73,6 +73,11 @@ body {
     max-width: 500px;
 }
 
+.selector-narrow {
+    min-width: 120px;
+    max-width: 140px;
+}
+
 .selector:hover {
     border-color: var(--color-border-hover);
 }
