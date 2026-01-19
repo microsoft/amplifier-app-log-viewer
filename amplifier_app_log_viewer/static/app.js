@@ -338,6 +338,44 @@ class LogViewer {
         }
     }
 
+    /**
+     * Format session display text for dropdowns.
+     * Shows session name if available, otherwise falls back to short ID.
+     */
+    formatSessionDisplay(session) {
+        let displayText = '';
+
+        // Primary display: session name or fallback to ID
+        if (session.name) {
+            // Truncate long names
+            displayText = session.name.length > 40
+                ? session.name.substring(0, 37) + '...'
+                : session.name;
+        } else {
+            // Fallback to ID-based display
+            const parts = session.id.split('-');
+            if (parts.length > 5) {
+                // Sub-agent session: show short ID + agent name
+                const shortId = session.id.substring(0, 8);
+                const agentPart = parts.slice(5).join('-');
+                displayText = `${shortId}... [${agentPart}]`;
+            } else {
+                // Parent session: show short ID
+                displayText = session.id.substring(0, 8) + '...';
+            }
+        }
+
+        // Add timestamp
+        if (session.timestamp) {
+            const ts = new Date(session.timestamp);
+            displayText += ` - ${ts.toLocaleString()}`;
+        } else {
+            displayText += ' - No timestamp';
+        }
+
+        return displayText;
+    }
+
     renderSessionList() {
         // Sort sessions based on checkbox preference
         const sortedSessions = this.sortSessions(this.sessions);
@@ -347,31 +385,13 @@ class LogViewer {
         sortedSessions.forEach(session => {
             const option = document.createElement('option');
             option.value = session.id;
+            option.textContent = this.formatSessionDisplay(session);
 
-            // Format session display
-            let displayText = '';
-
-            // Check if it's a sub-agent session (has suffix after 5th hyphen)
-            const parts = session.id.split('-');
-            if (parts.length > 5) {
-                // Sub-agent session: show short ID + agent name
-                const shortId = session.id.substring(0, 8);
-                const agentPart = parts.slice(5).join('-'); // Everything after UUID
-                displayText = `${shortId}... [${agentPart}]`;
-            } else {
-                // Parent session: show short ID
-                displayText = session.id.substring(0, 8) + '...';
+            // Add description as tooltip
+            if (session.description) {
+                option.title = session.description;
             }
 
-            // Add timestamp if available
-            if (session.timestamp) {
-                const ts = new Date(session.timestamp);
-                displayText += ` - ${ts.toLocaleString()}`;
-            } else {
-                displayText += ' - No timestamp';
-            }
-
-            option.textContent = displayText;
             this.sessionSelector.appendChild(option);
         });
     }
@@ -752,31 +772,18 @@ class LogViewer {
                 const currentSelection = this.sessionSelector.value;
                 this.sessions = newSessions;
 
-                // Rebuild dropdown
+                // Rebuild dropdown using shared helper
                 this.sessionSelector.innerHTML = '<option value="">Select session...</option>';
                 this.sessions.forEach(session => {
                     const option = document.createElement('option');
                     option.value = session.id;
+                    option.textContent = this.formatSessionDisplay(session);
 
-                    // Format session display
-                    let displayText = '';
-                    const parts = session.id.split('-');
-                    if (parts.length > 5) {
-                        const shortId = session.id.substring(0, 8);
-                        const agentPart = parts.slice(5).join('-');
-                        displayText = `${shortId}... [${agentPart}]`;
-                    } else {
-                        displayText = session.id.substring(0, 8) + '...';
+                    // Add description as tooltip
+                    if (session.description) {
+                        option.title = session.description;
                     }
 
-                    if (session.timestamp) {
-                        const ts = new Date(session.timestamp);
-                        displayText += ` - ${ts.toLocaleString()}`;
-                    } else {
-                        displayText += ' - No timestamp';
-                    }
-
-                    option.textContent = displayText;
                     this.sessionSelector.appendChild(option);
                 });
 

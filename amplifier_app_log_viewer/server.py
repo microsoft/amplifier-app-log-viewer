@@ -187,6 +187,10 @@ def get_sessions():
             "timestamp": session.timestamp,
             "parent_id": session.parent_id,
             "children": [child.id for child in session.children],
+            "name": session.metadata.get("name") if session.metadata else None,
+            "description": session.metadata.get("description")
+            if session.metadata
+            else None,
         }
         for session in project.sessions
     ]
