@@ -102,12 +102,10 @@ body {
     background-size: 14px;
 }
 
-/* Hide the native calendar icon since we have our own, but keep it clickable */
+/* Hide the native calendar icon but keep full clickable area */
 .date-input::-webkit-calendar-picker-indicator {
     opacity: 0;
     cursor: pointer;
-    width: 20px;
-    height: 20px;
 }
 
 .date-input:hover {
