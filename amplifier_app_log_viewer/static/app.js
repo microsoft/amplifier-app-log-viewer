@@ -12,7 +12,7 @@ class LogViewer {
         this.eventStream = null;
         this.isRestoringState = false;  // Flag to prevent saving during restore
         
-        // API base path for app-specific routing (e.g., '/log-viewer')
+        // API base path for app-specific routing (e.g., '/amplifier/logs')
         this.apiBase = apiBase;
 
         // Event detail cache: line_num -> full event data

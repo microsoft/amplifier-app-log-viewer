@@ -108,7 +108,7 @@ def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> F
     Args:
         projects_dir: Path to Amplifier projects directory.
                      Defaults to ~/.amplifier/projects
-        base_path: Base path for serving (e.g., '/log-viewer').
+        base_path: Base path for serving (e.g., '/amplifier/logs').
                    Defaults to '' (root path).
 
     Returns:

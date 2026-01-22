@@ -48,7 +48,7 @@ class ServiceManager(ABC):
             port: Port for the web server
             projects_dir: Path to Amplifier projects directory
             host: Host to bind to (use 0.0.0.0 for network access)
-            base_path: Base path for serving app (e.g., '/log-viewer')
+            base_path: Base path for serving app (e.g., '/amplifier/logs')
         """
         self.port = port
         self.projects_dir = projects_dir or Path.home() / ".amplifier" / "projects"
@@ -172,7 +172,7 @@ def get_service_manager(
         port: Port for the web server
         projects_dir: Path to Amplifier projects directory
         host: Host to bind to (use 0.0.0.0 for network access)
-        base_path: Base path for serving app (e.g., '/log-viewer')
+        base_path: Base path for serving app (e.g., '/amplifier/logs')
 
     Returns:
         ServiceManager instance for the current platform

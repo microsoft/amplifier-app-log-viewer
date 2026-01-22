@@ -33,7 +33,7 @@ amplifier-log-viewer --host 0.0.0.0
 amplifier-log-viewer --projects-dir /path/to/projects
 
 # Run at a subpath (for reverse proxy deployments)
-amplifier-log-viewer --base-path /log-viewer
+amplifier-log-viewer --base-path /amplifier/logs
 ```
 
 **Running at a Subpath**
@@ -41,16 +41,16 @@ amplifier-log-viewer --base-path /log-viewer
 If you're running the log viewer behind a reverse proxy (like nginx, Caddy, or Tailscale Serve) at a subpath instead of the root:
 
 ```bash
-# Example: Accessing via https://my-server.com/log-viewer/
-amplifier-log-viewer --base-path /log-viewer
+# Example: Accessing via https://my-server.com/amplifier/logs/
+amplifier-log-viewer --base-path /amplifier/logs
 ```
 
 This ensures:
-- Static assets load from the correct path: `/log-viewer/static/style.css`
-- API calls use the correct endpoint: `/log-viewer/api/sessions`
+- Static assets load from the correct path: `/amplifier/logs/static/style.css`
+- API calls use the correct endpoint: `/amplifier/logs/api/sessions`
 
 **Requirements for `--base-path`:**
-- Must start with `/` (e.g., `/log-viewer`, not `log-viewer`)
+- Must start with `/` (e.g., `/amplifier/logs`, not `amplifier/logs`)
 - Cannot contain `..` (for security reasons)
 - Trailing slashes are automatically removed
 

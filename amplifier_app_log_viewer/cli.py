@@ -23,7 +23,7 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".amplifier" / "projects"
 @click.option(
     "--base-path",
     default="",
-    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+    help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
 @click.pass_context
 def cli(
@@ -59,7 +59,7 @@ def cli(
 @click.option(
     "--base-path",
     default="",
-    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+    help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
 def serve(port: int, projects_dir: Path, host: str, base_path: str) -> None:
     """Run the log viewer server in foreground.
@@ -112,7 +112,7 @@ def service(ctx: click.Context) -> None:
 @click.option(
     "--base-path",
     default="",
-    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+    help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
 @click.pass_context
 def service_install(
