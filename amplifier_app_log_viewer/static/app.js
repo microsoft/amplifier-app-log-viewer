@@ -1,7 +1,7 @@
 // Amplifier Log Viewer - Network tab-style interface with progressive loading
 
 class LogViewer {
-    constructor() {
+    constructor(apiBase = "") {
         this.projects = [];
         this.sessions = [];
         this.events = [];           // Lightweight event headers
@@ -11,6 +11,9 @@ class LogViewer {
         this.currentSessionId = null;
         this.eventStream = null;
         this.isRestoringState = false;  // Flag to prevent saving during restore
+        
+        // API base path for app-specific routing (e.g., '/amplifier/logs')
+        this.apiBase = apiBase;
 
         // Event detail cache: line_num -> full event data
         this.eventCache = new Map();
@@ -60,6 +63,12 @@ class LogViewer {
 
         this.init();
     }
+
+    // URL building helper for app-specific routing
+    buildUrl(path) {
+        return this.apiBase + path;
+    }
+
 
     // LocalStorage helpers
     saveToStorage(key, value) {
@@ -297,7 +306,7 @@ class LogViewer {
 
     restoreSelectedEvent() {
         this.isRestoringState = true;
-        
+
         const saved = this.loadFromStorage(this.STATE_KEYS.selectedEventId, null);
         if (!saved || this.filteredEvents.length === 0) {
             this.isRestoringState = false;
@@ -330,7 +339,7 @@ class LogViewer {
                 selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
             }
         }
-        
+
         this.isRestoringState = false;
     }
 
@@ -376,7 +385,7 @@ class LogViewer {
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             this.projects = data.projects || [];
 
@@ -416,7 +425,7 @@ class LogViewer {
             let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             this.sessions = data.sessions || [];
 
@@ -525,7 +534,7 @@ class LogViewer {
 
         try {
             // NEW: Load lightweight event list (no payloads)
-            const response = await fetch(`/api/events/list?session=${sessionId}`);
+            const response = await fetch(this.buildUrl(`/api/events/list?session=${sessionId}`));
             const data = await response.json();
             this.events = data.events || [];  // Lightweight event headers
 
@@ -565,7 +574,7 @@ class LogViewer {
     }
 
     startEventStream(sessionId) {
-        this.eventStream = new EventSource(`/stream/${sessionId}`);
+        this.eventStream = new EventSource(this.buildUrl(`/stream/${sessionId}`));
         this.eventStream.addEventListener('new_events', (e) => {
             // NEW: SSE now sends lightweight events
             const newEvents = JSON.parse(e.data);
@@ -721,7 +730,7 @@ class LogViewer {
         try {
             // Fetch full event by line number
             const response = await fetch(
-                `/api/events/${this.currentSessionId}/${lineNum}`
+                this.buildUrl(`/api/events/${this.currentSessionId}/${lineNum}`)
             );
             
             if (!response.ok) {
@@ -839,7 +848,7 @@ class LogViewer {
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             const newProjects = data.projects || [];
 
@@ -877,7 +886,7 @@ class LogViewer {
             let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             const newSessions = data.sessions || [];
 
@@ -914,7 +923,7 @@ class LogViewer {
     async refresh() {
         // Force server-side refresh by calling /api/refresh endpoint
         try {
-            const response = await fetch('/api/refresh', { method: 'POST' });
+            const response = await fetch(this.buildUrl('/api/refresh'), { method: 'POST' });
             if (!response.ok) {
                 console.error('Failed to refresh session tree');
             }
@@ -1022,7 +1031,7 @@ class LogViewer {
 
     async checkScanStatus() {
         try {
-            const response = await fetch('/api/status');
+            const response = await fetch(this.buildUrl('/api/status'))
             const status = await response.json();
             this.updateScanIndicator(status);
         } catch (error) {
@@ -1074,8 +1083,3 @@ class LogViewer {
         await this.loadEvents(sessionId);
     }
 }
-
-// Initialize on page load (expose globally for debugging)
-document.addEventListener('DOMContentLoaded', () => {
-    window.logViewer = new LogViewer();
-});

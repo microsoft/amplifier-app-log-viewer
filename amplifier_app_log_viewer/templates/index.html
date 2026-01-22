@@ -7,6 +7,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='tokens.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='js/json-viewer/json-viewer.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        // Base URL for API calls (injected by Flask)
+        const API_BASE = '{{ BASE_PATH }}';
+    </script>
 </head>
 <body>
     <div class="app-container">
@@ -134,5 +138,11 @@
 
     <script src="{{ url_for('static', filename='js/json-viewer/json-viewer.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <script>
+        // Initialize the LogViewer with the API base path
+        document.addEventListener('DOMContentLoaded', () => {
+            window.logViewer = new LogViewer(API_BASE);
+        });
+    </script>
 </body>
 </html>

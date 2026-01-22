@@ -7,8 +7,10 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+from flask import Blueprint
 from flask import Flask
 from flask import Response
+from flask import current_app
 from flask import jsonify
 from flask import render_template
 from flask import request
@@ -81,7 +83,8 @@ def session_in_date_range(
     except (ValueError, AttributeError):
         return False
 
-app = Flask(__name__)
+
+bp = Blueprint("app", __name__)
 
 # Global state
 _session_tree = None
@@ -92,7 +95,12 @@ _cache_duration = (
 )
 
 
-def create_app(projects_dir: str | Path | None = None) -> Flask:
+def inject_base_path():
+    """Make BASE_PATH available in all templates."""
+    return {"BASE_PATH": current_app.config.get("APPLICATION_ROOT", "")}
+
+
+def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> Flask:
     """Create and configure the Flask application.
 
     This is an app factory function for use with service managers.
@@ -100,14 +108,42 @@ def create_app(projects_dir: str | Path | None = None) -> Flask:
     Args:
         projects_dir: Path to Amplifier projects directory.
                      Defaults to ~/.amplifier/projects
+        base_path: Base path for serving (e.g., '/amplifier/logs').
+                   Defaults to '' (root path).
 
     Returns:
         Configured Flask application
     """
+    normalized_base_path = base_path or ""
+
     if projects_dir is None:
         projects_dir = Path.home() / ".amplifier" / "projects"
     else:
         projects_dir = Path(projects_dir)
+
+    # Set base path (always reset global state, even if empty)
+    if normalized_base_path:
+        # Validate base path format
+        if not normalized_base_path.startswith("/"):
+            raise ValueError(
+                f"base_path must start with '/': {normalized_base_path!r}. "
+                f"Did you mean '/{normalized_base_path}'?"
+            )
+
+        # Prevent path traversal attempts
+        if ".." in normalized_base_path:
+            raise ValueError(
+                f"base_path cannot contain '..' for security reasons: "
+                f"{normalized_base_path!r}"
+            )
+
+        # Remove trailing slash for consistency
+        normalized_base_path = normalized_base_path.rstrip("/")
+
+    app = Flask(__name__)
+    app.config["APPLICATION_ROOT"] = normalized_base_path
+    app.context_processor(inject_base_path)
+    app.register_blueprint(bp, url_prefix=normalized_base_path or None)
 
     init_session_tree(projects_dir)
     return app
@@ -153,13 +189,13 @@ def ensure_fresh_session_tree():
         refresh_session_tree()
 
 
-@app.route("/")
+@bp.route("/", strict_slashes=False)
 def index():
     """Serve main HTML page."""
     return render_template("index.html")
 
 
-@app.route("/api/status")
+@bp.route("/api/status")
 def get_status():
     """Get server and scan status."""
     scan_state = session_scanner.get_scan_state()
@@ -178,7 +214,7 @@ def get_status():
     )
 
 
-@app.route("/api/projects")
+@bp.route("/api/projects")
 def get_projects():
     """List all projects with session counts.
 
@@ -234,7 +270,7 @@ def get_projects():
     return response
 
 
-@app.route("/api/refresh", methods=["POST"])
+@bp.route("/api/refresh", methods=["POST"])
 def refresh():
     """Manually refresh the session tree."""
     try:
@@ -253,7 +289,7 @@ def refresh():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/sessions")
+@bp.route("/api/sessions")
 def get_sessions():
     """List sessions for a project.
 
@@ -306,7 +342,7 @@ def get_sessions():
     return response
 
 
-@app.route("/api/events/list")
+@bp.route("/api/events/list")
 def get_event_list():
     """Get lightweight event list for a session (no payloads).
 
@@ -330,7 +366,7 @@ def get_event_list():
     return jsonify({"events": events, "total": len(events)})
 
 
-@app.route("/api/events/<session_id>/<int:line_num>")
+@bp.route("/api/events/<session_id>/<int:line_num>")
 def get_event_detail(session_id: str, line_num: int):
     """Get full event detail by line number.
 
@@ -350,7 +386,7 @@ def get_event_detail(session_id: str, line_num: int):
     return jsonify(event)
 
 
-@app.route("/api/events")
+@bp.route("/api/events")
 def get_events():
     """Get paginated events for a session (DEPRECATED).
 
@@ -389,7 +425,7 @@ def get_events():
     )
 
 
-@app.route("/api/session/<session_id>/metadata")
+@bp.route("/api/session/<session_id>/metadata")
 def get_session_metadata(session_id: str):
     """Get session metadata."""
     if not _session_tree:
@@ -409,7 +445,7 @@ def get_session_metadata(session_id: str):
     )
 
 
-@app.route("/stream/<session_id>")
+@bp.route("/stream/<session_id>")
 def stream_events(session_id: str):
     """
     Server-Sent Events stream for real-time log updates.
@@ -458,7 +494,7 @@ def run_server(projects_dir: Path, port: int = 8180):
         port: Port to run server on (will try next ports if in use)
     """
     print(f"Initializing session tree from {projects_dir}")
-    init_session_tree(projects_dir)
+    app = create_app(projects_dir)
 
     # Show helpful message if no projects found
     if not _session_tree or not _session_tree.projects:
