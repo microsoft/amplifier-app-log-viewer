@@ -84,7 +84,7 @@ def session_in_date_range(
         return False
 
 
-bp = Blueprint("log_viewer", __name__)
+bp = Blueprint("app", __name__)
 
 # Global state
 _session_tree = None
