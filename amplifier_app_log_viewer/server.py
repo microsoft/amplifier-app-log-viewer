@@ -242,9 +242,7 @@ def get_projects():
         # Count sessions matching date filter
         if start_date or end_date:
             matching_sessions = [
-                s
-                for s in project.sessions
-                if session_in_date_range(s, start_date, end_date)
+                s for s in project.sessions if session_in_date_range(s, start_date, end_date)
             ]
             session_count = len(matching_sessions)
         else:
