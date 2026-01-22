@@ -380,12 +380,12 @@ class LogViewer {
     async loadProjects() {
         try {
             const { since, until } = this.getDateRangeParams();
-            let url = this.buildUrl('/api/projects');
+            let url = '/api/projects';
             const params = [];
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             this.projects = data.projects || [];
 
@@ -422,10 +422,10 @@ class LogViewer {
 
         try {
             const { since, until } = this.getDateRangeParams();
-            let url = this.buildUrl(`/api/sessions?project=${projectSlug}`);
+            let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             this.sessions = data.sessions || [];
 
@@ -843,12 +843,12 @@ class LogViewer {
         // Refresh project list when dropdown is opened (focused)
         try {
             const { since, until } = this.getDateRangeParams();
-            let url = this.buildUrl('/api/projects');
+            let url = '/api/projects';
             const params = [];
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             const newProjects = data.projects || [];
 
@@ -883,10 +883,10 @@ class LogViewer {
 
         try {
             const { since, until } = this.getDateRangeParams();
-            let url = this.buildUrl(`/api/sessions?project=${projectSlug}`);
+            let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(url);
+            const response = await fetch(this.buildUrl(url));
             const data = await response.json();
             const newSessions = data.sessions || [];
 
