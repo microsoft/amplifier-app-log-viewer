@@ -56,18 +56,24 @@ class LaunchdServiceManager(ServiceManager):
         """Generate the launchd plist configuration."""
         home = str(Path.home())
 
+        program_arguments = [
+            str(executable),
+            "serve",
+            "--port",
+            str(self.port),
+            "--host",
+            self.host,
+            "--projects-dir",
+            str(self.projects_dir),
+        ]
+
+        # Add base-path if specified
+        if self.base_path:
+            program_arguments.extend(["--base-path", self.base_path])
+
         return {
             "Label": self.label,
-            "ProgramArguments": [
-                str(executable),
-                "serve",
-                "--port",
-                str(self.port),
-                "--host",
-                self.host,
-                "--projects-dir",
-                str(self.projects_dir),
-            ],
+            "ProgramArguments": program_arguments,
             "EnvironmentVariables": {
                 "HOME": home,
                 "PATH": f"{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",

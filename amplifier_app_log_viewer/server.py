@@ -81,9 +81,11 @@ def session_in_date_range(
     except (ValueError, AttributeError):
         return False
 
+
 app = Flask(__name__)
 
 # Global state
+_base_path = ""  # Base path for serving (e.g., '/log-viewer')
 _session_tree = None
 _projects_dir = None
 _last_scan_time = 0
@@ -92,7 +94,13 @@ _cache_duration = (
 )
 
 
-def create_app(projects_dir: str | Path | None = None) -> Flask:
+@app.context_processor
+def inject_base_path():
+    """Make BASE_PATH available in all templates."""
+    return {"BASE_PATH": _base_path}
+
+
+def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> Flask:
     """Create and configure the Flask application.
 
     This is an app factory function for use with service managers.
@@ -100,14 +108,42 @@ def create_app(projects_dir: str | Path | None = None) -> Flask:
     Args:
         projects_dir: Path to Amplifier projects directory.
                      Defaults to ~/.amplifier/projects
+        base_path: Base path for serving (e.g., '/log-viewer').
+                   Defaults to '' (root path).
 
     Returns:
         Configured Flask application
     """
+    global _base_path
+
     if projects_dir is None:
         projects_dir = Path.home() / ".amplifier" / "projects"
     else:
         projects_dir = Path(projects_dir)
+
+    # Set base path (always reset global state, even if empty)
+    if base_path:
+        # Validate base path format
+        if not base_path.startswith("/"):
+            raise ValueError(
+                f"base_path must start with '/': {base_path!r}. "
+                f"Did you mean '/{base_path}'?"
+            )
+
+        # Prevent path traversal attempts
+        if ".." in base_path:
+            raise ValueError(
+                f"base_path cannot contain '..' for security reasons: {base_path!r}"
+            )
+
+        # Remove trailing slash for consistency
+        _base_path = base_path.rstrip("/")
+    else:
+        # Explicitly reset to empty string (root path)
+        _base_path = ""
+
+    # Always set APPLICATION_ROOT
+    app.config["APPLICATION_ROOT"] = _base_path
 
     init_session_tree(projects_dir)
     return app
@@ -206,7 +242,9 @@ def get_projects():
         # Count sessions matching date filter
         if start_date or end_date:
             matching_sessions = [
-                s for s in project.sessions if session_in_date_range(s, start_date, end_date)
+                s
+                for s in project.sessions
+                if session_in_date_range(s, start_date, end_date)
             ]
             session_count = len(matching_sessions)
         else:

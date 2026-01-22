@@ -20,8 +20,15 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".amplifier" / "projects"
     default="127.0.0.1",
     help="Host to bind to (use 0.0.0.0 for network access)",
 )
+@click.option(
+    "--base-path",
+    default="",
+    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+)
 @click.pass_context
-def cli(ctx: click.Context, port: int, projects_dir: Path, host: str) -> None:
+def cli(
+    ctx: click.Context, port: int, projects_dir: Path, host: str, base_path: str
+) -> None:
     """Amplifier Log Viewer - Web-based session log viewer.
 
     Run without a command to start the server in foreground mode.
@@ -31,10 +38,13 @@ def cli(ctx: click.Context, port: int, projects_dir: Path, host: str) -> None:
     ctx.obj["port"] = port
     ctx.obj["projects_dir"] = projects_dir
     ctx.obj["host"] = host
+    ctx.obj["base_path"] = base_path
 
     # If no subcommand, run the server (backwards compatible)
     if ctx.invoked_subcommand is None:
-        ctx.invoke(serve, port=port, projects_dir=projects_dir, host=host)
+        ctx.invoke(
+            serve, port=port, projects_dir=projects_dir, host=host, base_path=base_path
+        )
 
 
 @cli.command()
@@ -46,7 +56,12 @@ def cli(ctx: click.Context, port: int, projects_dir: Path, host: str) -> None:
     help="Path to Amplifier projects directory",
 )
 @click.option("--host", "-h", default="127.0.0.1", help="Host to bind to")
-def serve(port: int, projects_dir: Path, host: str) -> None:
+@click.option(
+    "--base-path",
+    default="",
+    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+)
+def serve(port: int, projects_dir: Path, host: str, base_path: str) -> None:
     """Run the log viewer server in foreground.
 
     This command is used by the service manager and can also be used
@@ -54,10 +69,12 @@ def serve(port: int, projects_dir: Path, host: str) -> None:
     """
     from .server import create_app
 
-    app = create_app(str(projects_dir))
+    app = create_app(str(projects_dir), base_path=base_path)
 
     click.echo("Starting Amplifier Log Viewer...")
     click.echo(f"  URL: http://{host}:{port}")
+    if base_path:
+        click.echo(f"  Base path: {base_path}")
     click.echo(f"  Projects: {projects_dir}")
     click.echo("  Press Ctrl+C to stop\n")
 
@@ -92,15 +109,22 @@ def service(ctx: click.Context) -> None:
     default="127.0.0.1",
     help="Host to bind to (use 0.0.0.0 for network access)",
 )
+@click.option(
+    "--base-path",
+    default="",
+    help="Base path for serving app (e.g., '/log-viewer'). Use when routing through subpaths.",
+)
 @click.pass_context
 def service_install(
-    ctx: click.Context, port: int, projects_dir: Path, host: str
+    ctx: click.Context, port: int, projects_dir: Path, host: str, base_path: str
 ) -> None:
     """Install as a background service."""
     from .service import ServiceStatus, get_service_manager
 
     try:
-        manager = get_service_manager(port=port, projects_dir=projects_dir, host=host)
+        manager = get_service_manager(
+            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+        )
     except NotImplementedError as e:
         raise click.ClickException(str(e))
 

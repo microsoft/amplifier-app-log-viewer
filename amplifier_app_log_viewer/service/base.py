@@ -40,6 +40,7 @@ class ServiceManager(ABC):
         port: int = 8180,
         projects_dir: Path | None = None,
         host: str = "127.0.0.1",
+        base_path: str = "",
     ):
         """Initialize service manager.
 
@@ -47,10 +48,12 @@ class ServiceManager(ABC):
             port: Port for the web server
             projects_dir: Path to Amplifier projects directory
             host: Host to bind to (use 0.0.0.0 for network access)
+            base_path: Base path for serving app (e.g., '/log-viewer')
         """
         self.port = port
         self.projects_dir = projects_dir or Path.home() / ".amplifier" / "projects"
         self.host = host
+        self.base_path = base_path
 
     @property
     @abstractmethod
@@ -158,7 +161,10 @@ class ServiceManager(ABC):
 
 
 def get_service_manager(
-    port: int = 8180, projects_dir: Path | None = None, host: str = "127.0.0.1"
+    port: int = 8180,
+    projects_dir: Path | None = None,
+    host: str = "127.0.0.1",
+    base_path: str = "",
 ) -> ServiceManager:
     """Get the appropriate service manager for the current platform.
 
@@ -166,6 +172,7 @@ def get_service_manager(
         port: Port for the web server
         projects_dir: Path to Amplifier projects directory
         host: Host to bind to (use 0.0.0.0 for network access)
+        base_path: Base path for serving app (e.g., '/log-viewer')
 
     Returns:
         ServiceManager instance for the current platform
@@ -178,11 +185,15 @@ def get_service_manager(
     if system == "Darwin":
         from .launchd import LaunchdServiceManager
 
-        return LaunchdServiceManager(port=port, projects_dir=projects_dir, host=host)
+        return LaunchdServiceManager(
+            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+        )
     elif system == "Linux":
         from .systemd import SystemdServiceManager
 
-        return SystemdServiceManager(port=port, projects_dir=projects_dir, host=host)
+        return SystemdServiceManager(
+            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+        )
     else:
         raise NotImplementedError(
             f"Service mode is not supported on {system}. "

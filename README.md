@@ -31,7 +31,28 @@ amplifier-log-viewer --host 0.0.0.0
 
 # Custom projects directory
 amplifier-log-viewer --projects-dir /path/to/projects
+
+# Run at a subpath (for reverse proxy deployments)
+amplifier-log-viewer --base-path /log-viewer
 ```
+
+**Running at a Subpath**
+
+If you're running the log viewer behind a reverse proxy (like nginx, Caddy, or Tailscale Serve) at a subpath instead of the root:
+
+```bash
+# Example: Accessing via https://my-server.com/log-viewer/
+amplifier-log-viewer --base-path /log-viewer
+```
+
+This ensures:
+- Static assets load from the correct path: `/log-viewer/static/style.css`
+- API calls use the correct endpoint: `/log-viewer/api/sessions`
+
+**Requirements for `--base-path`:**
+- Must start with `/` (e.g., `/log-viewer`, not `log-viewer`)
+- Cannot contain `..` (for security reasons)
+- Trailing slashes are automatically removed
 
 Server starts at `http://localhost:8180` by default. Open this URL in your browser.
 
@@ -84,6 +105,7 @@ amplifier-log-viewer service uninstall
 - **Network tab UI** - Browser developer tools-inspired 2-pane layout
 - **Persistent preferences** - Remembers selections, filters, sort order, active tab, and selected event
 - **Service mode** - Run as background daemon with systemd (Linux/WSL) or launchd (macOS)
+- **Subpath support** - Run behind reverse proxy at any URL path with `--base-path`
 
 ## Quick Start
 
