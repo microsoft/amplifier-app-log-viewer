@@ -242,7 +242,9 @@ def get_projects():
         # Count sessions matching date filter
         if start_date or end_date:
             matching_sessions = [
-                s for s in project.sessions if session_in_date_range(s, start_date, end_date)
+                s
+                for s in project.sessions
+                if session_in_date_range(s, start_date, end_date)
             ]
             session_count = len(matching_sessions)
         else:
@@ -326,10 +328,8 @@ def get_sessions():
             "timestamp": session.timestamp,
             "parent_id": session.parent_id,
             "children": [child.id for child in session.children],
-            "name": session.metadata.get("name") if session.metadata else None,
-            "description": session.metadata.get("description")
-            if session.metadata
-            else None,
+            "name": session.name,
+            "description": session.description,
         }
         for session in project.sessions
         if session_in_date_range(session, start_date, end_date)
@@ -349,10 +349,22 @@ def get_event_list():
     Returns only metadata needed for list display: line number, timestamp,
     event type, level, preview text, and size. Full event data is fetched
     on-demand via /api/events/<session_id>/<line_num>.
+
+    Query params:
+        session: Session ID (required)
+        offset: Line number to start from (default 0)
+        limit: Max events to return (default 200)
     """
     session_id = request.args.get("session")
     if not session_id:
         return jsonify({"error": "Missing 'session' parameter"}), 400
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = request.args.get("limit", 200, type=int)
+
+    # Validate parameters
+    if offset < 0 or limit < 1 or limit > 5000:
+        return jsonify({"error": "Invalid offset or limit"}), 400
 
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
@@ -361,9 +373,9 @@ def get_event_list():
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    events = log_reader.read_event_list(session.events_path)
+    result = log_reader.read_event_list(session.events_path, offset, limit)
 
-    return jsonify({"events": events, "total": len(events)})
+    return jsonify(result)
 
 
 @bp.route("/api/events/<session_id>/<int:line_num>")
@@ -379,7 +391,8 @@ def get_event_detail(session_id: str, line_num: int):
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    event = log_reader.read_single_event(session.events_path, line_num)
+    byte_offset = request.args.get("byte_offset", None, type=int)
+    event = log_reader.read_single_event(session.events_path, line_num, byte_offset)
     if not event:
         return jsonify({"error": "Event not found"}), 404
 
@@ -435,12 +448,22 @@ def get_session_metadata(session_id: str):
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
+    # Read context from metadata file on demand (not stored in memory)
+    context = {}
+    metadata_path = session.events_path.parent / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, encoding="utf-8") as f:
+                context = json.load(f).get("context", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+
     return jsonify(
         {
             "session_id": session.id,
             "timestamp": session.timestamp,
             "parent_session_id": session.parent_id,
-            "context": session.metadata.get("context", {}),
+            "context": context,
         }
     )
 
@@ -467,11 +490,12 @@ def stream_events(session_id: str):
         except OSError:
             # If file doesn't exist or can't be read, start from beginning
             last_position = 0
+        last_line_count = log_reader.count_lines(session.events_path)
 
         while True:
             # Check for new events
-            new_events, last_position = log_reader.tail_events(
-                session.events_path, last_position
+            new_events, last_position, last_line_count = log_reader.tail_events(
+                session.events_path, last_position, last_line_count
             )
 
             if new_events:

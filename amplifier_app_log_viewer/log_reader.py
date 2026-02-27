@@ -4,29 +4,59 @@ import json
 from pathlib import Path
 
 
-def read_event_list(file_path: Path) -> list[dict]:
+def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
     """
     Fast scan: read events but extract only header fields for list display.
 
     Returns lightweight event objects with just the metadata needed for
-    the event list view, not the full payload.
+    the event list view, not the full payload. Supports pagination via
+    offset and limit.
 
     Args:
         file_path: Path to events.jsonl file
+        offset: Line number to start reading from (0-indexed)
+        limit: Maximum number of events to return
 
     Returns:
-        List of lightweight event dicts with: line, ts, event, lvl, preview, size
+        Dict with: events, total, offset, limit, has_more
     """
-    if not file_path.exists():
-        return []
+    empty = {
+        "events": [],
+        "total": 0,
+        "offset": offset,
+        "limit": limit,
+        "has_more": False,
+    }
 
+    if not file_path.exists():
+        return empty
+
+    total = count_lines(file_path)
     events = []
 
     try:
-        with open(file_path, encoding="utf-8") as f:
-            for line_num, line in enumerate(f):
-                line = line.strip()
+        with open(file_path, "rb") as f:
+            byte_pos = 0
+
+            # Skip to offset
+            for _ in range(offset):
+                raw_line = f.readline()
+                if not raw_line:
+                    break
+                byte_pos += len(raw_line)
+
+            # Read up to limit lines
+            lines_read = 0
+            while lines_read < limit:
+                raw_line = f.readline()
+                if not raw_line:
+                    break
+                current_offset = byte_pos
+                byte_pos += len(raw_line)
+
+                line = raw_line.strip()
                 if not line:
+                    lines_read += 1
                     continue
 
                 try:
@@ -34,7 +64,8 @@ def read_event_list(file_path: Path) -> list[dict]:
                     # Extract only what we need for list display
                     events.append(
                         {
-                            "line": line_num,
+                            "line": offset + lines_read,
+                            "byte_offset": current_offset,
                             "ts": event.get("ts"),
                             "event": event.get("event"),
                             "lvl": event.get("lvl"),
@@ -44,24 +75,36 @@ def read_event_list(file_path: Path) -> list[dict]:
                         }
                     )
                 except json.JSONDecodeError:
-                    continue
+                    pass
+
+                lines_read += 1
 
     except OSError as e:
         print(f"Warning: Error reading {file_path}: {e}")
-        return []
+        return empty
 
-    return events
+    return {
+        "events": events,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+    }
 
 
-def read_single_event(file_path: Path, line_num: int) -> dict | None:
+def read_single_event(
+    file_path: Path, line_num: int, byte_offset: int | None = None
+) -> dict | None:
     """
     Read a single event by line number.
 
-    Efficiently seeks to the specific line without loading entire file.
+    If byte_offset is provided, seeks directly to that offset for O(1) access.
+    Otherwise falls back to a linear scan for backward compatibility.
 
     Args:
         file_path: Path to events.jsonl file
         line_num: Line number (0-indexed) to read
+        byte_offset: Optional byte offset to seek directly to the line
 
     Returns:
         Full event dict with line number added, or None if not found
@@ -70,6 +113,23 @@ def read_single_event(file_path: Path, line_num: int) -> dict | None:
         return None
 
     try:
+        if byte_offset is not None:
+            # Fast path: seek directly to byte offset
+            with open(file_path, "rb") as f:
+                f.seek(byte_offset)
+                raw_line = f.readline()
+                if raw_line:
+                    line = raw_line.strip()
+                    if line:
+                        try:
+                            event = json.loads(line)
+                            event["line"] = line_num
+                            return event
+                        except json.JSONDecodeError:
+                            return None
+                return None
+
+        # Fallback: linear scan (backward compatibility)
         with open(file_path, encoding="utf-8") as f:
             for current_line, line in enumerate(f):
                 if current_line == line_num:
@@ -215,41 +275,36 @@ def read_events(
     return events, total_lines
 
 
-def tail_events(file_path: Path, last_position: int = 0) -> tuple[list[dict], int]:
+def tail_events(
+    file_path: Path, last_position: int = 0, last_line_count: int = 0
+) -> tuple[list[dict], int, int]:
     """
     Read new events since last_position (byte offset).
 
-    Used by SSE streaming to detect new log entries.
+    Used by SSE streaming to detect new log entries. The caller tracks
+    both last_position and last_line_count, so this function only needs
+    to seek to last_position and read forward — no byte-0 re-scan.
 
     Args:
         file_path: Path to events.jsonl file
         last_position: Byte offset of last read position
+        last_line_count: Line count at last_position (for line numbering)
 
     Returns:
-        Tuple of (new_events, new_position) where new_events is list of
-        lightweight event dicts (for list display) and new_position is
-        current byte offset
+        Tuple of (new_events, new_position, new_line_count) where
+        new_events is list of lightweight event dicts, new_position is
+        current byte offset, and new_line_count is updated line count
     """
     if not file_path.exists():
-        return [], 0
+        return [], 0, 0
 
     new_events = []
     new_position = last_position
+    line_count = last_line_count
 
     try:
         with open(file_path, encoding="utf-8") as f:
-            # Get current line count up to last_position (for line numbering)
-            f.seek(0)
-            line_count = 0
-            pos = 0
-            for line in f:
-                if pos >= last_position:
-                    break
-                pos += len(line.encode("utf-8"))
-                if line.strip():
-                    line_count += 1
-
-            # Seek to last position and read new lines
+            # Seek directly to last position — no re-scan needed
             f.seek(last_position)
 
             for line in f:
@@ -281,26 +336,32 @@ def tail_events(file_path: Path, last_position: int = 0) -> tuple[list[dict], in
 
     except OSError as e:
         print(f"Warning: Error tailing {file_path}: {e}")
-        return new_events, last_position
+        return new_events, last_position, last_line_count
 
-    return new_events, new_position
+    return new_events, new_position, line_count
 
 
 def count_lines(file_path: Path) -> int:
     """
-    Fast line counting for pagination.
+    Fast line counting using buffered binary read.
 
     Args:
         file_path: Path to file
 
     Returns:
-        Number of non-empty lines in file
+        Number of newline-delimited lines in file
     """
     if not file_path.exists():
         return 0
 
     try:
-        with open(file_path, encoding="utf-8") as f:
-            return sum(1 for line in f if line.strip())
+        count = 0
+        with open(file_path, "rb") as f:
+            while True:
+                buf = f.read(1024 * 1024)  # 1MB chunks
+                if not buf:
+                    break
+                count += buf.count(b"\n")
+        return count
     except OSError:
         return 0

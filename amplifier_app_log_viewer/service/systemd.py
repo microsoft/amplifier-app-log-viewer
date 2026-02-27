@@ -19,6 +19,8 @@ ExecStart={executable} serve --port {port} --host {host} --projects-dir {project
 Restart=on-failure
 RestartSec=10
 Environment=HOME={home}
+MemoryHigh=3G
+MemoryMax=4G
 
 [Install]
 WantedBy=default.target

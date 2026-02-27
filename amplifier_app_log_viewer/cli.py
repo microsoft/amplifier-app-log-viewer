@@ -43,7 +43,12 @@ def cli(
     # If no subcommand, run the server (backwards compatible)
     if ctx.invoked_subcommand is None:
         ctx.invoke(
-            serve, port=port, projects_dir=projects_dir, host=host, base_path=base_path
+            serve,
+            port=port,
+            projects_dir=projects_dir,
+            host=host,
+            base_path=base_path,
+            threads=8,
         )
 
 
@@ -61,7 +66,14 @@ def cli(
     default="",
     help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
-def serve(port: int, projects_dir: Path, host: str, base_path: str) -> None:
+@click.option(
+    "--threads",
+    default=8,
+    help="Number of server threads (default: 8)",
+)
+def serve(
+    port: int, projects_dir: Path, host: str, base_path: str, threads: int
+) -> None:
     """Run the log viewer server in foreground.
 
     This command is used by the service manager and can also be used
@@ -76,9 +88,12 @@ def serve(port: int, projects_dir: Path, host: str, base_path: str) -> None:
     if base_path:
         click.echo(f"  Base path: {base_path}")
     click.echo(f"  Projects: {projects_dir}")
+    click.echo(f"  Threads: {threads}")
     click.echo("  Press Ctrl+C to stop\n")
 
-    app.run(host=host, port=port, debug=False, threaded=True)
+    from waitress import serve as waitress_serve
+
+    waitress_serve(app, host=host, port=port, threads=threads)
 
 
 @cli.group()

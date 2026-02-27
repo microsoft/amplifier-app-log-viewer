@@ -17,7 +17,11 @@ class Session:
     children: list["Session"]
     events_path: Path
     transcript_path: Path
-    metadata: dict
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    bundle: str | None = None
+    labels: list | None = None
 
 
 @dataclass
@@ -64,6 +68,7 @@ def get_scan_state() -> ScanState:
 def scan_projects(
     amplifier_home: Path | None = None,
     existing_tree: SessionTree | None = None,
+    max_age_days: int | None = None,
 ) -> SessionTree:
     """
     Scan ~/.amplifier/projects/ and build session tree.
@@ -74,6 +79,8 @@ def scan_projects(
     Args:
         amplifier_home: Path to ~/.amplifier directory (default: ~/.amplifier)
         existing_tree: Previous tree to update incrementally (optional)
+        max_age_days: Only include sessions whose directory mtime is within
+                      this many days. None (default) scans all sessions.
 
     Returns:
         SessionTree with all projects and sessions (empty if projects dir doesn't exist)
@@ -94,10 +101,15 @@ def scan_projects(
         if not projects_dir.exists():
             return SessionTree(projects=[], session_index={})
 
-        # Build lookup from existing tree for incremental updates
-        existing_sessions: dict[str, Session] = {}
-        if existing_tree:
-            existing_sessions = existing_tree.session_index.copy()
+        # Compute age cutoff for recency filtering
+        age_cutoff = (
+            time.time() - (max_age_days * 86400) if max_age_days is not None else None
+        )
+
+        # Reuse existing tree's index by reference (read-only lookup, no copy needed)
+        existing_sessions: dict[str, Session] = (
+            existing_tree.session_index if existing_tree else {}
+        )
 
         projects = []
         session_index = {}
@@ -134,6 +146,10 @@ def scan_projects(
                 except OSError:
                     continue
 
+                # Skip sessions older than max_age_days
+                if age_cutoff is not None and session_mtime < age_cutoff:
+                    continue
+
                 cached_mtime = _scan_state.session_mtimes.get(session_id)
 
                 # Reuse existing session if directory hasn't changed
@@ -158,17 +174,26 @@ def scan_projects(
                 events_path = session_dir / "events.jsonl"
                 transcript_path = session_dir / "transcript.jsonl"
 
-                # Parse metadata
-                metadata = {}
+                # Parse metadata — extract only the fields we need
                 parent_id = None
                 timestamp = ""
+                name = None
+                description = None
+                status = None
+                bundle = None
+                labels = None
 
                 if metadata_path.exists():
                     try:
                         with open(metadata_path, encoding="utf-8") as f:
-                            metadata = json.load(f)
-                            parent_id = metadata.get("parent_session_id")
-                            timestamp = metadata.get("created", "")
+                            raw = json.load(f)
+                            parent_id = raw.get("parent_session_id")
+                            timestamp = raw.get("created", "")
+                            name = raw.get("name")
+                            description = raw.get("description")
+                            status = raw.get("status")
+                            bundle = raw.get("bundle")
+                            labels = raw.get("labels")
                     except (json.JSONDecodeError, OSError):
                         # Use fallback values
                         pass
@@ -182,7 +207,11 @@ def scan_projects(
                     children=[],
                     events_path=events_path,
                     transcript_path=transcript_path,
-                    metadata=metadata,
+                    name=name,
+                    description=description,
+                    status=status,
+                    bundle=bundle,
+                    labels=labels,
                 )
 
                 project_sessions.append(session)
@@ -207,6 +236,16 @@ def scan_projects(
             if session.parent_id and session.parent_id in session_index:
                 parent = session_index[session.parent_id]
                 parent.children.append(session)
+
+        # Prune stale entries from scan state (directories that no longer exist)
+        live_session_ids = set(session_index.keys())
+        for sid in list(_scan_state.session_mtimes):
+            if sid not in live_session_ids:
+                del _scan_state.session_mtimes[sid]
+        live_project_slugs = {p.slug for p in projects}
+        for slug in list(_scan_state.project_mtimes):
+            if slug not in live_project_slugs:
+                del _scan_state.project_mtimes[slug]
 
         return SessionTree(projects=projects, session_index=session_index)
 

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "click>=8.0.0",
+    "waitress>=3.0.0",
 ]
 
 [project.scripts]
