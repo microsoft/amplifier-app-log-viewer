@@ -527,9 +527,10 @@ class LogViewer {
         // Clear event cache when switching sessions
         this.eventCache.clear();
 
-        // Stop previous event stream
+        // Stop previous event poll
         if (this.eventStream) {
-            this.eventStream.close();
+            clearInterval(this.eventStream);
+            this.eventStream = null;
         }
 
         try {
@@ -574,13 +575,65 @@ class LogViewer {
     }
 
     startEventStream(sessionId) {
-        this.eventStream = new EventSource(this.buildUrl(`/stream/${sessionId}`));
-        this.eventStream.addEventListener('new_events', (e) => {
-            // NEW: SSE now sends lightweight events
-            const newEvents = JSON.parse(e.data);
-            this.events.push(...newEvents);
-            this.applyFilters();
-        });
+        // Track position for incremental polling
+        // Initialize from the last event we loaded via REST, or file size will be
+        // determined server-side when position=0 returns everything from the start.
+        // We pass the current event count and let the server handle positioning.
+        const lastEvent = this.events[this.events.length - 1];
+        this._pollPosition = 0;  // Will be set by first poll response
+        this._pollLineCount = this.events.length;
+        this._pollSessionId = sessionId;
+        this._pollInitialized = false;
+
+        // Initialize position from the REST endpoint's state
+        // First poll with current line count to establish byte position
+        this._initPoll(sessionId);
+
+        // Short-lived poll every 2s — thread is released between polls
+        this.eventStream = setInterval(async () => {
+            if (this._pollSessionId !== sessionId) return;
+            if (!this._pollInitialized) return;  // Wait for init
+            try {
+                const url = this.buildUrl(
+                    `/api/events/since?session=${encodeURIComponent(sessionId)}` +
+                    `&position=${this._pollPosition}&line_count=${this._pollLineCount}`
+                );
+                const response = await fetch(url);
+                if (!response.ok) return;
+                const data = await response.json();
+                if (data.events && data.events.length > 0) {
+                    this.events.push(...data.events);
+                    this.applyFilters();
+                }
+                this._pollPosition = data.position;
+                this._pollLineCount = data.line_count;
+            } catch (e) {
+                // Ignore transient errors — next poll will retry
+            }
+        }, 2000);
+    }
+
+    async _initPoll(sessionId) {
+        // Establish the initial byte position by asking the server for events
+        // since position 0 with our current line count. The server returns the
+        // current file position so subsequent polls only get new data.
+        try {
+            const url = this.buildUrl(
+                `/api/events/since?session=${encodeURIComponent(sessionId)}` +
+                `&position=0&line_count=0`
+            );
+            const response = await fetch(url);
+            if (!response.ok) return;
+            const data = await response.json();
+            // Don't add these events — we already have them from the REST load.
+            // Just capture the position for future polls.
+            this._pollPosition = data.position;
+            this._pollLineCount = data.line_count;
+            this._pollInitialized = true;
+        } catch (e) {
+            // Retry will happen on next interval
+            this._pollInitialized = true;
+        }
     }
 
     applyFilters() {
@@ -1025,8 +1078,8 @@ class LogViewer {
 
     // Status polling for scan indicator
     startStatusPolling() {
-        // Poll every 500ms to catch scan status changes
-        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 500);
+        // Poll every 5s — scan status doesn't need sub-second updates
+        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 5000);
     }
 
     async checkScanStatus() {

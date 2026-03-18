@@ -31,8 +31,8 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
     if not file_path.exists():
         return empty
 
-    total = count_lines(file_path)
     events = []
+    hit_limit = False
 
     try:
         with open(file_path, "rb") as f:
@@ -79,16 +79,24 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
 
                 lines_read += 1
 
+            # Check if there are more lines after the ones we read
+            # by attempting to read one more line (avoids full file scan)
+            if lines_read == limit:
+                next_line = f.readline()
+                hit_limit = bool(next_line)
+
     except OSError as e:
         print(f"Warning: Error reading {file_path}: {e}")
         return empty
+
+    total = offset + len(events) + (1 if hit_limit else 0)
 
     return {
         "events": events,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "has_more": offset + limit < total,
+        "has_more": hit_limit,
     }
 
 
