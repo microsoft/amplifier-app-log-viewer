@@ -534,10 +534,15 @@ class LogViewer {
         }
 
         try {
-            // NEW: Load lightweight event list (no payloads)
+            // Load lightweight event list (no payloads)
             const response = await fetch(this.buildUrl(`/api/events/list?session=${sessionId}`));
             const data = await response.json();
             this.events = data.events || [];  // Lightweight event headers
+
+            // Capture tail position for polling — starts exactly where this load ended.
+            // No separate init request needed, no gap, no wasted I/O.
+            this._pollPosition = data.tail_position || 0;
+            this._pollLineCount = data.tail_line_count || this.events.length;
 
             // Populate dynamic filters from actual event data
             this.populateDynamicFilters();
@@ -575,31 +580,27 @@ class LogViewer {
     }
 
     startEventStream(sessionId) {
-        // Track position for incremental polling
-        // Initialize from the last event we loaded via REST, or file size will be
-        // determined server-side when position=0 returns everything from the start.
-        // We pass the current event count and let the server handle positioning.
-        const lastEvent = this.events[this.events.length - 1];
-        this._pollPosition = 0;  // Will be set by first poll response
-        this._pollLineCount = this.events.length;
+        // _pollPosition and _pollLineCount are set by loadEvents() from the
+        // /api/events/list response's tail_position and tail_line_count fields.
+        // This means polling starts exactly where the REST load left off —
+        // no separate init request, no gap, no wasted I/O.
         this._pollSessionId = sessionId;
-        this._pollInitialized = false;
-
-        // Initialize position from the REST endpoint's state
-        // First poll with current line count to establish byte position
-        this._initPoll(sessionId);
+        this._pollErrorCount = 0;
 
         // Short-lived poll every 2s — thread is released between polls
         this.eventStream = setInterval(async () => {
             if (this._pollSessionId !== sessionId) return;
-            if (!this._pollInitialized) return;  // Wait for init
             try {
                 const url = this.buildUrl(
                     `/api/events/since?session=${encodeURIComponent(sessionId)}` +
                     `&position=${this._pollPosition}&line_count=${this._pollLineCount}`
                 );
                 const response = await fetch(url);
-                if (!response.ok) return;
+                if (!response.ok) {
+                    this._pollErrorCount++;
+                    return;
+                }
+                this._pollErrorCount = 0;
                 const data = await response.json();
                 if (data.events && data.events.length > 0) {
                     this.events.push(...data.events);
@@ -608,32 +609,12 @@ class LogViewer {
                 this._pollPosition = data.position;
                 this._pollLineCount = data.line_count;
             } catch (e) {
-                // Ignore transient errors — next poll will retry
+                this._pollErrorCount++;
+                if (this._pollErrorCount >= 5) {
+                    console.warn('Event polling: multiple consecutive failures, server may be down');
+                }
             }
         }, 2000);
-    }
-
-    async _initPoll(sessionId) {
-        // Establish the initial byte position by asking the server for events
-        // since position 0 with our current line count. The server returns the
-        // current file position so subsequent polls only get new data.
-        try {
-            const url = this.buildUrl(
-                `/api/events/since?session=${encodeURIComponent(sessionId)}` +
-                `&position=0&line_count=0`
-            );
-            const response = await fetch(url);
-            if (!response.ok) return;
-            const data = await response.json();
-            // Don't add these events — we already have them from the REST load.
-            // Just capture the position for future polls.
-            this._pollPosition = data.position;
-            this._pollLineCount = data.line_count;
-            this._pollInitialized = true;
-        } catch (e) {
-            // Retry will happen on next interval
-            this._pollInitialized = true;
-        }
     }
 
     applyFilters() {
@@ -1078,8 +1059,9 @@ class LogViewer {
 
     // Status polling for scan indicator
     startStatusPolling() {
-        // Poll every 5s — scan status doesn't need sub-second updates
-        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 5000);
+        // Poll every 2s — fast enough to catch scan transitions (scans take 0.5-5s),
+        // while reducing the original 500ms (2 req/s) to a more reasonable rate.
+        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 2000);
     }
 
     async checkScanStatus() {

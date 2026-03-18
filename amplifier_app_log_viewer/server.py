@@ -185,13 +185,22 @@ def refresh_session_tree():
         )
 
 
+_refresh_thread = None
+
+
 def _start_background_refresh():
     """Start a daemon thread that refreshes the session tree periodically.
 
     This replaces the old ensure_fresh_session_tree() approach which ran
     the scan inline on request threads, blocking them for 1-5 seconds.
     Now requests always read from the cached tree with zero I/O cost.
+
+    Guarded against multiple calls (e.g. tests creating multiple apps,
+    or Flask dev reload) — only one thread runs at a time.
     """
+    global _refresh_thread
+    if _refresh_thread is not None and _refresh_thread.is_alive():
+        return
 
     def worker():
         while True:
@@ -201,8 +210,10 @@ def _start_background_refresh():
             except Exception as e:
                 print(f"[Refresh] Error: {e}")
 
-    t = threading.Thread(target=worker, daemon=True, name="session-tree-refresh")
-    t.start()
+    _refresh_thread = threading.Thread(
+        target=worker, daemon=True, name="session-tree-refresh"
+    )
+    _refresh_thread.start()
 
 
 @bp.route("/", strict_slashes=False)

@@ -21,3 +21,8 @@ testpaths = ["tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "strict"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+

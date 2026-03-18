@@ -18,7 +18,7 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         limit: Maximum number of events to return
 
     Returns:
-        Dict with: events, total, offset, limit, has_more
+        Dict with: events, total, offset, limit, has_more, tail_position, tail_line_count
     """
     empty = {
         "events": [],
@@ -26,6 +26,8 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         "offset": offset,
         "limit": limit,
         "has_more": False,
+        "tail_position": 0,
+        "tail_line_count": 0,
     }
 
     if not file_path.exists():
@@ -89,7 +91,19 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         print(f"Warning: Error reading {file_path}: {e}")
         return empty
 
-    total = offset + len(events) + (1 if hit_limit else 0)
+    # Tail position for polling: O(1) stat call — no file reading
+    try:
+        tail_position = file_path.stat().st_size
+    except OSError:
+        tail_position = 0
+
+    if hit_limit:
+        # More events than limit — need exact total for line numbering.
+        # count_lines scans bytes in 1MB chunks (no JSON parsing) — fast.
+        total = count_lines(file_path)
+    else:
+        # All events fit — we have the exact count already
+        total = offset + len(events)
 
     return {
         "events": events,
@@ -97,6 +111,8 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         "offset": offset,
         "limit": limit,
         "has_more": hit_limit,
+        "tail_position": tail_position,
+        "tail_line_count": total,
     }
 
 
