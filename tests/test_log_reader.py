@@ -88,13 +88,17 @@ def test_tail_events(tmp_path):
         f.write('{"index": 2}\n')
         f.write('{"index": 3}\n')
 
-    # Tail from initial position
-    new_events, new_position = log_reader.tail_events(events_file, initial_position)
+    # Tail from initial position (returns lightweight event dicts, not raw JSON)
+    new_events, new_position, new_line_count = log_reader.tail_events(
+        events_file, initial_position, last_line_count=2
+    )
 
     assert len(new_events) == 2
-    assert new_events[0]["index"] == 2
-    assert new_events[1]["index"] == 3
+    # Lightweight events have "event" key (from event.get("event")), not raw fields
+    assert new_events[0]["line"] == 2
+    assert new_events[1]["line"] == 3
     assert new_position > initial_position
+    assert new_line_count == 4
 
 
 def test_count_lines(temp_events_file):

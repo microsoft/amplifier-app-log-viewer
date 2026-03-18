@@ -18,7 +18,7 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         limit: Maximum number of events to return
 
     Returns:
-        Dict with: events, total, offset, limit, has_more
+        Dict with: events, total, offset, limit, has_more, tail_position, tail_line_count
     """
     empty = {
         "events": [],
@@ -26,13 +26,15 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
         "offset": offset,
         "limit": limit,
         "has_more": False,
+        "tail_position": 0,
+        "tail_line_count": 0,
     }
 
     if not file_path.exists():
         return empty
 
-    total = count_lines(file_path)
     events = []
+    hit_limit = False
 
     try:
         with open(file_path, "rb") as f:
@@ -79,16 +81,38 @@ def read_event_list(file_path: Path, offset: int = 0, limit: int = 200) -> dict:
 
                 lines_read += 1
 
+            # Check if there are more lines after the ones we read
+            # by attempting to read one more line (avoids full file scan)
+            if lines_read == limit:
+                next_line = f.readline()
+                hit_limit = bool(next_line)
+
     except OSError as e:
         print(f"Warning: Error reading {file_path}: {e}")
         return empty
+
+    # Tail position for polling: O(1) stat call — no file reading
+    try:
+        tail_position = file_path.stat().st_size
+    except OSError:
+        tail_position = 0
+
+    if hit_limit:
+        # More events than limit — need exact total for line numbering.
+        # count_lines scans bytes in 1MB chunks (no JSON parsing) — fast.
+        total = count_lines(file_path)
+    else:
+        # All events fit — we have the exact count already
+        total = offset + len(events)
 
     return {
         "events": events,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "has_more": offset + limit < total,
+        "has_more": hit_limit,
+        "tail_position": tail_position,
+        "tail_line_count": total,
     }
 
 

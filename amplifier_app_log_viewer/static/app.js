@@ -527,16 +527,22 @@ class LogViewer {
         // Clear event cache when switching sessions
         this.eventCache.clear();
 
-        // Stop previous event stream
+        // Stop previous event poll
         if (this.eventStream) {
-            this.eventStream.close();
+            clearInterval(this.eventStream);
+            this.eventStream = null;
         }
 
         try {
-            // NEW: Load lightweight event list (no payloads)
+            // Load lightweight event list (no payloads)
             const response = await fetch(this.buildUrl(`/api/events/list?session=${sessionId}`));
             const data = await response.json();
             this.events = data.events || [];  // Lightweight event headers
+
+            // Capture tail position for polling — starts exactly where this load ended.
+            // No separate init request needed, no gap, no wasted I/O.
+            this._pollPosition = data.tail_position || 0;
+            this._pollLineCount = data.tail_line_count || this.events.length;
 
             // Populate dynamic filters from actual event data
             this.populateDynamicFilters();
@@ -574,13 +580,41 @@ class LogViewer {
     }
 
     startEventStream(sessionId) {
-        this.eventStream = new EventSource(this.buildUrl(`/stream/${sessionId}`));
-        this.eventStream.addEventListener('new_events', (e) => {
-            // NEW: SSE now sends lightweight events
-            const newEvents = JSON.parse(e.data);
-            this.events.push(...newEvents);
-            this.applyFilters();
-        });
+        // _pollPosition and _pollLineCount are set by loadEvents() from the
+        // /api/events/list response's tail_position and tail_line_count fields.
+        // This means polling starts exactly where the REST load left off —
+        // no separate init request, no gap, no wasted I/O.
+        this._pollSessionId = sessionId;
+        this._pollErrorCount = 0;
+
+        // Short-lived poll every 2s — thread is released between polls
+        this.eventStream = setInterval(async () => {
+            if (this._pollSessionId !== sessionId) return;
+            try {
+                const url = this.buildUrl(
+                    `/api/events/since?session=${encodeURIComponent(sessionId)}` +
+                    `&position=${this._pollPosition}&line_count=${this._pollLineCount}`
+                );
+                const response = await fetch(url);
+                if (!response.ok) {
+                    this._pollErrorCount++;
+                    return;
+                }
+                this._pollErrorCount = 0;
+                const data = await response.json();
+                if (data.events && data.events.length > 0) {
+                    this.events.push(...data.events);
+                    this.applyFilters();
+                }
+                this._pollPosition = data.position;
+                this._pollLineCount = data.line_count;
+            } catch (e) {
+                this._pollErrorCount++;
+                if (this._pollErrorCount >= 5) {
+                    console.warn('Event polling: multiple consecutive failures, server may be down');
+                }
+            }
+        }, 2000);
     }
 
     applyFilters() {
@@ -1025,8 +1059,9 @@ class LogViewer {
 
     // Status polling for scan indicator
     startStatusPolling() {
-        // Poll every 500ms to catch scan status changes
-        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 500);
+        // Poll every 2s — fast enough to catch scan transitions (scans take 0.5-5s),
+        // while reducing the original 500ms (2 req/s) to a more reasonable rate.
+        this.statusPollInterval = setInterval(() => this.checkScanStatus(), 2000);
     }
 
     async checkScanStatus() {

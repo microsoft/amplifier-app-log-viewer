@@ -1,6 +1,7 @@
 """Flask server with REST API and SSE streaming."""
 
 import json
+import threading
 import time
 from datetime import datetime
 from datetime import timedelta
@@ -9,12 +10,10 @@ from pathlib import Path
 
 from flask import Blueprint
 from flask import Flask
-from flask import Response
 from flask import current_app
 from flask import jsonify
 from flask import render_template
 from flask import request
-from flask import stream_with_context
 
 from . import log_reader
 from . import session_scanner
@@ -93,6 +92,7 @@ _last_scan_time = 0
 _cache_duration = (
     30  # Seconds before auto-refresh (increased - incremental scans are fast)
 )
+_refresh_lock = threading.Lock()
 
 
 def inject_base_path():
@@ -146,6 +146,7 @@ def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> F
     app.register_blueprint(bp, url_prefix=normalized_base_path or None)
 
     init_session_tree(projects_dir)
+    _start_background_refresh()
     return app
 
 
@@ -157,36 +158,62 @@ def init_session_tree(projects_dir: Path):
 
 
 def refresh_session_tree():
-    """Refresh session tree by rescanning projects directory (incremental)."""
+    """Refresh session tree by rescanning projects directory (incremental).
+
+    Thread-safe: uses _refresh_lock to prevent concurrent scans and
+    protect _session_tree from data races.
+    """
     global _session_tree, _last_scan_time
     if _projects_dir is None:
         raise RuntimeError("Projects directory not initialized")
 
-    amplifier_home = _projects_dir.parent
+    with _refresh_lock:
+        amplifier_home = _projects_dir.parent
 
-    # Pass existing tree for incremental scanning
-    _session_tree = session_scanner.scan_projects(amplifier_home, _session_tree)
-    _last_scan_time = time.time()
+        # Pass existing tree for incremental scanning
+        _session_tree = session_scanner.scan_projects(amplifier_home, _session_tree)
+        _last_scan_time = time.time()
 
-    # Log refresh with incremental stats
-    scan_state = session_scanner.get_scan_state()
-    project_count = len(_session_tree.projects)
-    session_count = len(_session_tree.session_index)
-    print(
-        f"[Refresh] {project_count} projects, {session_count} sessions "
-        f"(scanned: {scan_state.sessions_scanned}, cached: {scan_state.sessions_cached}, "
-        f"took {scan_state.last_scan_duration:.2f}s)"
+        # Log refresh with incremental stats
+        scan_state = session_scanner.get_scan_state()
+        project_count = len(_session_tree.projects)
+        session_count = len(_session_tree.session_index)
+        print(
+            f"[Refresh] {project_count} projects, {session_count} sessions "
+            f"(scanned: {scan_state.sessions_scanned}, cached: {scan_state.sessions_cached}, "
+            f"took {scan_state.last_scan_duration:.2f}s)"
+        )
+
+
+_refresh_thread = None
+
+
+def _start_background_refresh():
+    """Start a daemon thread that refreshes the session tree periodically.
+
+    This replaces the old ensure_fresh_session_tree() approach which ran
+    the scan inline on request threads, blocking them for 1-5 seconds.
+    Now requests always read from the cached tree with zero I/O cost.
+
+    Guarded against multiple calls (e.g. tests creating multiple apps,
+    or Flask dev reload) — only one thread runs at a time.
+    """
+    global _refresh_thread
+    if _refresh_thread is not None and _refresh_thread.is_alive():
+        return
+
+    def worker():
+        while True:
+            time.sleep(_cache_duration)
+            try:
+                refresh_session_tree()
+            except Exception as e:
+                print(f"[Refresh] Error: {e}")
+
+    _refresh_thread = threading.Thread(
+        target=worker, daemon=True, name="session-tree-refresh"
     )
-
-
-def ensure_fresh_session_tree():
-    """Auto-refresh session tree if cache expired."""
-    if _session_tree is None:
-        return  # Not initialized yet
-
-    time_since_scan = time.time() - _last_scan_time
-    if time_since_scan > _cache_duration:
-        refresh_session_tree()
+    _refresh_thread.start()
 
 
 @bp.route("/", strict_slashes=False)
@@ -222,8 +249,6 @@ def get_projects():
         since: Start date - either ISO date or relative like '2d', '7d', '30d'
         until: End date - ISO date string (for custom date ranges)
     """
-    ensure_fresh_session_tree()
-
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
@@ -300,8 +325,6 @@ def get_sessions():
         since: Start date - either ISO date or relative like '2d', '7d', '30d'
         until: End date - ISO date string (for custom date ranges)
     """
-    ensure_fresh_session_tree()
-
     project_slug = request.args.get("project")
     if not project_slug:
         return jsonify({"error": "Missing 'project' parameter"}), 400
@@ -468,13 +491,26 @@ def get_session_metadata(session_id: str):
     )
 
 
-@bp.route("/stream/<session_id>")
-def stream_events(session_id: str):
-    """
-    Server-Sent Events stream for real-time log updates.
+@bp.route("/api/events/since")
+def get_events_since():
+    """Poll for new events since a given byte position.
 
-    Simplified implementation: polls events.jsonl every 2 seconds for new entries.
+    Returns immediately with any new events, releasing the thread.
+    This replaces the old SSE /stream/<session_id> endpoint which held
+    a thread permanently per connection.
+
+    Query params:
+        session: Session ID (required)
+        position: Byte offset to read from (default 0)
+        line_count: Current line count for numbering (default 0)
     """
+    session_id = request.args.get("session")
+    if not session_id:
+        return jsonify({"error": "Missing 'session' parameter"}), 400
+
+    last_position = request.args.get("position", 0, type=int)
+    last_line_count = request.args.get("line_count", 0, type=int)
+
     if not _session_tree:
         return jsonify({"error": "Session tree not initialized"}), 500
 
@@ -482,31 +518,17 @@ def stream_events(session_id: str):
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    def event_stream():
-        """Generate SSE events."""
-        # Initialize to end of file to avoid re-sending events already loaded via REST API
-        try:
-            last_position = session.events_path.stat().st_size
-        except OSError:
-            # If file doesn't exist or can't be read, start from beginning
-            last_position = 0
-        last_line_count = log_reader.count_lines(session.events_path)
+    new_events, new_position, new_line_count = log_reader.tail_events(
+        session.events_path, last_position, last_line_count
+    )
 
-        while True:
-            # Check for new events
-            new_events, last_position, last_line_count = log_reader.tail_events(
-                session.events_path, last_position, last_line_count
-            )
-
-            if new_events:
-                # Send lightweight events (tail_events already returns lightweight format)
-                data = json.dumps(new_events)
-                yield f"event: new_events\ndata: {data}\n\n"
-
-            # Poll every 2 seconds
-            time.sleep(2)
-
-    return Response(stream_with_context(event_stream()), mimetype="text/event-stream")
+    return jsonify(
+        {
+            "events": new_events,
+            "position": new_position,
+            "line_count": new_line_count,
+        }
+    )
 
 
 def run_server(projects_dir: Path, port: int = 8180):
