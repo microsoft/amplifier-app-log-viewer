@@ -1250,6 +1250,8 @@ class LogViewer {
         if (this.viewMode !== 'events' || this.filteredEvents.length === 0) return;
         this.renderEvents({ window: 'bottom' });
         this.eventListContent.scrollTop = this.eventListContent.scrollHeight;
+        // Auto-select the newest event so its detail opens without an extra click.
+        this.selectEvent(this.filteredEvents.length - 1);
     }
 
     createEventItem(event, index) {
