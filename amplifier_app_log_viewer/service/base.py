@@ -2,9 +2,12 @@
 
 import platform
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from .. import session_scanner
 
 
 class ServiceStatus(Enum):
@@ -38,7 +41,7 @@ class ServiceManager(ABC):
     def __init__(
         self,
         port: int = 8180,
-        projects_dir: Path | None = None,
+        roots: Sequence[str | Path] | None = None,
         host: str = "127.0.0.1",
         base_path: str = "",
     ):
@@ -46,12 +49,15 @@ class ServiceManager(ABC):
 
         Args:
             port: Port for the web server
-            projects_dir: Path to Amplifier projects directory
+            roots: Log roots to scan (repeatable). Defaults (via
+                   session_scanner.resolve_roots()) to $AMPLIFIER_LOG_ROOTS,
+                   or ~/.amplifier/projects and
+                   ~/.amplifier-agent/state/workspaces.
             host: Host to bind to (use 0.0.0.0 for network access)
             base_path: Base path for serving app (e.g., '/amplifier/logs')
         """
         self.port = port
-        self.projects_dir = projects_dir or Path.home() / ".amplifier" / "projects"
+        self.roots = session_scanner.resolve_roots(roots)
         self.host = host
         self.base_path = base_path
 
@@ -162,7 +168,7 @@ class ServiceManager(ABC):
 
 def get_service_manager(
     port: int = 8180,
-    projects_dir: Path | None = None,
+    roots: Sequence[str | Path] | None = None,
     host: str = "127.0.0.1",
     base_path: str = "",
 ) -> ServiceManager:
@@ -170,7 +176,7 @@ def get_service_manager(
 
     Args:
         port: Port for the web server
-        projects_dir: Path to Amplifier projects directory
+        roots: Log roots to scan (repeatable). See resolve_roots() for defaults.
         host: Host to bind to (use 0.0.0.0 for network access)
         base_path: Base path for serving app (e.g., '/amplifier/logs')
 
@@ -186,13 +192,13 @@ def get_service_manager(
         from .launchd import LaunchdServiceManager
 
         return LaunchdServiceManager(
-            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+            port=port, roots=roots, host=host, base_path=base_path
         )
     elif system == "Linux":
         from .systemd import SystemdServiceManager
 
         return SystemdServiceManager(
-            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+            port=port, roots=roots, host=host, base_path=base_path
         )
     else:
         raise NotImplementedError(

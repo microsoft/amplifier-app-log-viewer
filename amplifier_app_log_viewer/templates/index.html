@@ -54,23 +54,30 @@
 
         <!-- Filter bar -->
         <div class="filter-bar">
+            <div class="view-toggle" id="view-toggle">
+                <button class="view-btn active" data-view="events">Events</button>
+                <button class="view-btn" data-view="transcript">Transcript</button>
+            </div>
             <input
                 type="text"
                 id="filter-input"
                 class="search-input"
                 placeholder="Search events..."
             >
-            <select id="level-filter" class="filter-select">
-                <option value="">All Levels</option>
-                <option value="INFO">INFO</option>
-                <option value="DEBUG">DEBUG</option>
-                <option value="WARNING">WARNING</option>
-                <option value="ERROR">ERROR</option>
-            </select>
-            <select id="event-type-filter" class="filter-select">
-                <option value="">All Event Types</option>
-                <!-- Dynamically populated from actual events -->
-            </select>
+            <span id="event-filters">
+                <select id="level-filter" class="filter-select">
+                    <option value="">All Levels</option>
+                    <option value="INFO">INFO</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+                <select id="event-type-filter" class="filter-select">
+                    <option value="">All Event Types</option>
+                    <!-- Dynamically populated from actual events -->
+                </select>
+                <button id="jump-latest-btn" class="btn-secondary" title="Jump to the newest loaded event">Jump to latest</button>
+            </span>
             <button id="clear-filters" class="btn-secondary">Clear</button>
             <span id="filter-count" class="filter-count"></span>
         </div>
@@ -91,6 +98,7 @@
                 <div id="loading-indicator" class="loading-indicator" style="display: none;">
                     Loading events...
                 </div>
+                <div id="event-load-banner" class="event-load-banner" style="display: none;"></div>
             </div>
 
             <!-- Detail Panel (right, flex-fill) -->

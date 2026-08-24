@@ -409,6 +409,34 @@ body {
     font-size: var(--font-size-sm);
 }
 
+/* Windowed-render sentinels — visible affordance + click fallback at either edge */
+.event-sentinel {
+    padding: var(--space-2) var(--space-3);
+    text-align: center;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    border-bottom: var(--border-width-1) solid var(--color-border-secondary);
+}
+
+.event-sentinel:hover {
+    background-color: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+/* Full-session load banner — shown while a session is above AUTO_LOAD_MAX */
+.event-load-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-bg-tertiary);
+    border-top: var(--border-width-1) solid var(--color-border-primary);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
 .welcome-message {
     padding: var(--space-6);
     text-align: center;
@@ -618,4 +646,143 @@ body {
         width: 300px;
         min-width: 250px;
     }
+}
+
+/* View toggle (Events / Transcript) */
+.view-toggle {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background-color: var(--color-bg-primary);
+    border: var(--border-width-1) solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+}
+
+.view-btn {
+    padding: var(--space-1) var(--space-3);
+    background: none;
+    color: var(--color-text-secondary);
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.view-btn:hover {
+    color: var(--color-text-primary);
+}
+
+.view-btn.active {
+    background-color: var(--color-bg-hover);
+    color: var(--color-accent-primary);
+    font-weight: var(--font-weight-medium);
+}
+
+/* Transcript message cards */
+.transcript-message {
+    display: flex;
+    gap: var(--space-2);
+    align-items: flex-start;
+    padding: var(--space-2) var(--space-3);
+    border-bottom: var(--border-width-1) solid var(--color-border-secondary);
+    cursor: pointer;
+}
+
+.transcript-message:hover {
+    background-color: var(--color-bg-hover);
+}
+
+.transcript-message.selected {
+    background-color: var(--color-accent-primary-alpha);
+    border-left: 3px solid var(--color-accent-primary);
+}
+
+.role-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 60px;
+    padding: 2px var(--space-1);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+.role-badge.user {
+    background-color: var(--color-status-info-bg);
+    color: var(--color-status-info-fg);
+}
+
+.role-badge.assistant {
+    background-color: var(--color-status-debug-bg);
+    color: var(--color-status-debug-fg);
+}
+
+.role-badge.tool {
+    background-color: var(--color-status-warning-bg);
+    color: var(--color-status-warning-fg);
+}
+
+.transcript-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.transcript-text {
+    font-size: var(--font-size-sm);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 20em;
+    overflow: hidden;
+}
+
+.transcript-text.expanded {
+    max-height: none;
+}
+
+.transcript-thinking {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    font-style: italic;
+}
+
+.transcript-thinking summary {
+    cursor: pointer;
+}
+
+.transcript-tool-call {
+    display: inline-block;
+    padding: 2px var(--space-2);
+    margin-right: var(--space-1);
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+}
+
+.transcript-expand-btn {
+    align-self: flex-start;
+    padding: var(--space-1) var(--space-2);
+    background: none;
+    border: var(--border-width-1) solid var(--color-border-primary);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+}
+
+.transcript-expand-btn:hover {
+    background-color: var(--color-bg-hover);
+}
+
+/* Wide reading pane when in Transcript view */
+.main-content.transcript-mode .event-list-pane {
+    flex: 1 1 auto;
+    max-width: none;
 }

@@ -15,7 +15,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart={executable} serve --port {port} --host {host} --projects-dir {projects_dir} {base_path_arg}
+ExecStart={executable} serve --port {port} --host {host} {roots_args} {base_path_arg}
 Restart=on-failure
 RestartSec=10
 Environment=HOME={home}
@@ -99,11 +99,12 @@ class SystemdServiceManager(ServiceManager):
 
         # Generate service file content
         base_path_arg = f"--base-path {self.base_path}" if self.base_path else ""
+        roots_args = " ".join(f'--root "{r}"' for r in self.roots)
         content = SYSTEMD_SERVICE_TEMPLATE.format(
             executable=executable,
             port=self.port,
             host=self.host,
-            projects_dir=self.projects_dir,
+            roots_args=roots_args,
             base_path_arg=base_path_arg,
             home=Path.home(),
         )

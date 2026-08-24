@@ -1,20 +1,36 @@
 """CLI entry point for amplifier-log-viewer using Click."""
 
-import click
 from pathlib import Path
 
+import click
+
+from . import session_scanner
+
 DEFAULT_PORT = 8180
-DEFAULT_PROJECTS_DIR = Path.home() / ".amplifier" / "projects"
+
+
+def roots_option(f):
+    """Shared --root/--projects-dir repeatable option.
+
+    Kept as a single decorator so the cli group, `serve`, and
+    `service install` commands can't drift from each other.
+    """
+    return click.option(
+        "--root",
+        "--projects-dir",
+        "roots",
+        type=click.Path(exists=False, path_type=Path),
+        multiple=True,
+        help=(
+            "Log root to scan (repeatable). Default: ~/.amplifier/projects and "
+            "~/.amplifier-agent/state/workspaces. Env: AMPLIFIER_LOG_ROOTS."
+        ),
+    )(f)
 
 
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=DEFAULT_PORT, help="Port to run the server on")
-@click.option(
-    "--projects-dir",
-    type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_PROJECTS_DIR,
-    help="Path to Amplifier projects directory",
-)
+@roots_option
 @click.option(
     "--host",
     default="127.0.0.1",
@@ -27,7 +43,7 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".amplifier" / "projects"
 )
 @click.pass_context
 def cli(
-    ctx: click.Context, port: int, projects_dir: Path, host: str, base_path: str
+    ctx: click.Context, port: int, roots: tuple[Path, ...], host: str, base_path: str
 ) -> None:
     """Amplifier Log Viewer - Web-based session log viewer.
 
@@ -36,7 +52,7 @@ def cli(
     """
     ctx.ensure_object(dict)
     ctx.obj["port"] = port
-    ctx.obj["projects_dir"] = projects_dir
+    ctx.obj["roots"] = roots
     ctx.obj["host"] = host
     ctx.obj["base_path"] = base_path
 
@@ -45,7 +61,7 @@ def cli(
         ctx.invoke(
             serve,
             port=port,
-            projects_dir=projects_dir,
+            roots=roots,
             host=host,
             base_path=base_path,
             threads=8,
@@ -54,12 +70,7 @@ def cli(
 
 @cli.command()
 @click.option("--port", "-p", default=DEFAULT_PORT, help="Port to run the server on")
-@click.option(
-    "--projects-dir",
-    type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_PROJECTS_DIR,
-    help="Path to Amplifier projects directory",
-)
+@roots_option
 @click.option("--host", "-h", default="127.0.0.1", help="Host to bind to")
 @click.option(
     "--base-path",
@@ -72,7 +83,7 @@ def cli(
     help="Number of server threads (default: 8)",
 )
 def serve(
-    port: int, projects_dir: Path, host: str, base_path: str, threads: int
+    port: int, roots: tuple[Path, ...], host: str, base_path: str, threads: int
 ) -> None:
     """Run the log viewer server in foreground.
 
@@ -81,13 +92,17 @@ def serve(
     """
     from .server import create_app
 
-    app = create_app(str(projects_dir), base_path=base_path)
+    # Resolve here (not just inside create_app) so the startup banner shows
+    # exactly what will be scanned.
+    resolved_roots = session_scanner.resolve_roots(roots or None)
+    app = create_app(resolved_roots, base_path=base_path)
 
     click.echo("Starting Amplifier Log Viewer...")
     click.echo(f"  URL: http://{host}:{port}")
     if base_path:
         click.echo(f"  Base path: {base_path}")
-    click.echo(f"  Projects: {projects_dir}")
+    for root in resolved_roots:
+        click.echo(f"  Root: {root}")
     click.echo(f"  Threads: {threads}")
     click.echo("  Press Ctrl+C to stop\n")
 
@@ -108,17 +123,11 @@ def service(ctx: click.Context) -> None:
       - Linux/WSL: systemd user service
       - macOS: launchd LaunchAgent
     """
-    pass
 
 
 @service.command("install")
 @click.option("--port", "-p", default=DEFAULT_PORT, help="Port for the service")
-@click.option(
-    "--projects-dir",
-    type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_PROJECTS_DIR,
-    help="Path to Amplifier projects directory",
-)
+@roots_option
 @click.option(
     "--host",
     default="127.0.0.1",
@@ -131,14 +140,14 @@ def service(ctx: click.Context) -> None:
 )
 @click.pass_context
 def service_install(
-    ctx: click.Context, port: int, projects_dir: Path, host: str, base_path: str
+    ctx: click.Context, port: int, roots: tuple[Path, ...], host: str, base_path: str
 ) -> None:
     """Install as a background service."""
     from .service import ServiceStatus, get_service_manager
 
     try:
         manager = get_service_manager(
-            port=port, projects_dir=projects_dir, host=host, base_path=base_path
+            port=port, roots=roots or None, host=host, base_path=base_path
         )
     except NotImplementedError as e:
         raise click.ClickException(str(e))
