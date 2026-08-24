@@ -7,6 +7,11 @@ dependencies = [
     "flask>=3.0.0",
     "click>=8.0.0",
     "waitress>=3.0.0",
+    "python-pam>=1.8.4",
+    # python-pam 2.x's __internals module imports `six` but does not declare
+    # it in its own package metadata (upstream packaging gap) -- without this,
+    # `import pam` raises ModuleNotFoundError on a clean install.
+    "six>=1.16.0",
 ]
 
 [project.scripts]

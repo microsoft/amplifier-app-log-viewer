@@ -8,6 +8,8 @@ from . import session_scanner
 
 DEFAULT_PORT = 8180
 
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "localhost6"}
+
 
 def roots_option(f):
     """Shared --root/--projects-dir repeatable option.
@@ -28,6 +30,76 @@ def roots_option(f):
     )(f)
 
 
+def auth_options(f):
+    """Shared --auth/--session-ttl/--behind-tls-proxy options.
+
+    One decorator so `cli`, `serve`, and `service install` cannot drift --
+    same reason roots_option exists.
+    """
+    f = click.option(
+        "--behind-tls-proxy",
+        is_flag=True,
+        default=False,
+        help=(
+            "Assert that a TLS-terminating proxy sits in front of this server. "
+            "Marks the session cookie Secure and silences the cleartext warning. "
+            "Env: AMPLIFIER_LOG_VIEWER_BEHIND_TLS_PROXY."
+        ),
+    )(f)
+    f = click.option(
+        "--session-ttl",
+        type=int,
+        default=None,
+        help="Session cookie lifetime in seconds (default 604800; 0 = browser session).",
+    )(f)
+    f = click.option(
+        "--auth",
+        "auth_mode",
+        type=click.Choice(["pam", "password"]),
+        default=None,
+        help="Authentication mode (default: pam when available, else password).",
+    )(f)
+    return f
+
+
+def warn_if_cleartext(host: str, behind_tls_proxy: bool) -> None:
+    """Loudly warn when credentials would cross a network in the clear.
+
+    Fires on any non-loopback bind without an asserted TLS terminator. The
+    PAM password on POST /login and the session cookie on every subsequent
+    request are both plaintext over HTTP.
+    """
+    if host in LOOPBACK_HOSTS or behind_tls_proxy:
+        return
+    click.secho("", err=True)
+    click.secho("  " + "!" * 68, fg="red", bold=True, err=True)
+    click.secho(
+        f"  WARNING: bound to {host} over plain HTTP -- no TLS.",
+        fg="red",
+        bold=True,
+        err=True,
+    )
+    click.secho(
+        "  Your system password (at login) and session cookie (every request)",
+        fg="red",
+        err=True,
+    )
+    click.secho("  will cross the network in cleartext.", fg="red", err=True)
+    click.secho("", err=True)
+    click.secho("  Put TLS in front of it, or reach it over a private link:", err=True)
+    click.secho("    tailscale serve --bg <port>        # simplest", err=True)
+    click.secho("    ssh -L <port>:127.0.0.1:<port> <host>", err=True)
+    click.secho("    caddy / nginx reverse proxy with a cert", err=True)
+    click.secho("", err=True)
+    click.secho(
+        "  Once TLS terminates upstream, re-run with --behind-tls-proxy so the",
+        err=True,
+    )
+    click.secho("  session cookie is marked Secure.", err=True)
+    click.secho("  " + "!" * 68, fg="red", bold=True, err=True)
+    click.secho("", err=True)
+
+
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=DEFAULT_PORT, help="Port to run the server on")
 @roots_option
@@ -41,9 +113,17 @@ def roots_option(f):
     default="",
     help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
+@auth_options
 @click.pass_context
 def cli(
-    ctx: click.Context, port: int, roots: tuple[Path, ...], host: str, base_path: str
+    ctx: click.Context,
+    port: int,
+    roots: tuple[Path, ...],
+    host: str,
+    base_path: str,
+    auth_mode: str | None,
+    session_ttl: int | None,
+    behind_tls_proxy: bool,
 ) -> None:
     """Amplifier Log Viewer - Web-based session log viewer.
 
@@ -55,6 +135,9 @@ def cli(
     ctx.obj["roots"] = roots
     ctx.obj["host"] = host
     ctx.obj["base_path"] = base_path
+    ctx.obj["auth_mode"] = auth_mode
+    ctx.obj["session_ttl"] = session_ttl
+    ctx.obj["behind_tls_proxy"] = behind_tls_proxy
 
     # If no subcommand, run the server (backwards compatible)
     if ctx.invoked_subcommand is None:
@@ -65,6 +148,9 @@ def cli(
             host=host,
             base_path=base_path,
             threads=8,
+            auth_mode=auth_mode,
+            session_ttl=session_ttl,
+            behind_tls_proxy=behind_tls_proxy,
         )
 
 
@@ -82,20 +168,32 @@ def cli(
     default=8,
     help="Number of server threads (default: 8)",
 )
+@auth_options
 def serve(
-    port: int, roots: tuple[Path, ...], host: str, base_path: str, threads: int
+    port: int,
+    roots: tuple[Path, ...],
+    host: str,
+    base_path: str,
+    threads: int,
+    auth_mode: str | None,
+    session_ttl: int | None,
+    behind_tls_proxy: bool,
 ) -> None:
     """Run the log viewer server in foreground.
 
     This command is used by the service manager and can also be used
     to run the server directly in the terminal.
     """
+    from .auth import expected_username, resolve_auth_config
     from .server import create_app
 
     # Resolve here (not just inside create_app) so the startup banner shows
     # exactly what will be scanned.
     resolved_roots = session_scanner.resolve_roots(roots or None)
-    app = create_app(resolved_roots, base_path=base_path)
+    auth_cfg = resolve_auth_config(
+        mode=auth_mode, ttl_seconds=session_ttl, behind_tls_proxy=behind_tls_proxy
+    )
+    app = create_app(resolved_roots, base_path=base_path, auth=auth_cfg)
 
     click.echo("Starting Amplifier Log Viewer...")
     click.echo(f"  URL: http://{host}:{port}")
@@ -104,7 +202,15 @@ def serve(
     for root in resolved_roots:
         click.echo(f"  Root: {root}")
     click.echo(f"  Threads: {threads}")
+    click.echo(f"  Auth: {auth_cfg.mode}", nl=False)
+    if auth_cfg.mode == "pam":
+        click.echo(f" (user: {expected_username(auth_cfg)})")
+    else:
+        click.echo("")
+    click.echo(f"  Session TTL: {auth_cfg.ttl_seconds}s")
     click.echo("  Press Ctrl+C to stop\n")
+
+    warn_if_cleartext(host, behind_tls_proxy)
 
     from waitress import serve as waitress_serve
 
@@ -138,11 +244,28 @@ def service(ctx: click.Context) -> None:
     default="",
     help="Base path for serving app (e.g., '/amplifier/logs'). Use when routing through subpaths.",
 )
+@auth_options
 @click.pass_context
 def service_install(
-    ctx: click.Context, port: int, roots: tuple[Path, ...], host: str, base_path: str
+    ctx: click.Context,
+    port: int,
+    roots: tuple[Path, ...],
+    host: str,
+    base_path: str,
+    auth_mode: str | None,
+    session_ttl: int | None,
+    behind_tls_proxy: bool,
 ) -> None:
-    """Install as a background service."""
+    """Install as a background service.
+
+    Note: auth mode/TTL/behind-tls-proxy are not yet baked into the
+    generated service unit's ExecStart -- the installed service picks up
+    auth using its own defaults (PAM, 7-day TTL) at run time, same as
+    invoking `serve` with no auth flags. Passing these flags here is
+    accepted (for forward compatibility) but currently has no effect on
+    the installed unit; use `serve` directly if you need non-default auth
+    settings enforced at install time.
+    """
     from .service import ServiceStatus, get_service_manager
 
     try:

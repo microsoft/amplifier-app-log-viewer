@@ -9,6 +9,7 @@ from pathlib import Path
 from flask import Blueprint, Flask, current_app, jsonify, render_template, request
 
 from . import log_reader, session_scanner
+from .auth import AuthConfig, install_auth, resolve_auth_config
 
 
 def parse_date_filter(since: str | None) -> datetime | None:
@@ -93,7 +94,9 @@ def inject_base_path():
 
 
 def create_app(
-    roots: str | Path | Sequence[str | Path] | None = None, base_path: str = ""
+    roots: str | Path | Sequence[str | Path] | None = None,
+    base_path: str = "",
+    auth: AuthConfig | None = None,
 ) -> Flask:
     """Create and configure the Flask application.
 
@@ -107,6 +110,9 @@ def create_app(
                ~/.amplifier-agent/state/workspaces.
         base_path: Base path for serving (e.g., '/amplifier/logs').
                    Defaults to '' (root path).
+        auth: Auth configuration. None (default) resolves from CLI-less
+              defaults + environment. Auth is always enforced; there is no
+              way to disable it.
 
     Returns:
         Configured Flask application
@@ -143,6 +149,7 @@ def create_app(
     app.config["APPLICATION_ROOT"] = normalized_base_path
     app.context_processor(inject_base_path)
     app.register_blueprint(bp, url_prefix=normalized_base_path or None)
+    install_auth(app, auth or resolve_auth_config(), normalized_base_path)
 
     init_session_tree(root_list)
     _start_background_refresh()
@@ -597,45 +604,3 @@ def get_events_since():
             "line_count": new_line_count,
         }
     )
-
-
-def run_server(roots: Sequence[Path], port: int = 8180):
-    """
-    Start Flask server with automatic port selection if requested port is in use.
-
-    Args:
-        roots: Log roots to scan (see session_scanner.resolve_roots())
-        port: Port to run server on (will try next ports if in use)
-    """
-    print(f"Initializing session tree from {len(roots)} root(s):")
-    for r in roots:
-        print(f"  - {r}")
-    app = create_app(roots)
-
-    # Show helpful message if no projects found
-    if not _session_tree or not _session_tree.projects:
-        print("\nNo Amplifier projects found yet.")
-        print("   Run Amplifier at least once to create session logs.")
-        print("   Logs will appear in:")
-        for r in roots:
-            print(f"     {r}")
-        print()
-
-    # Try requested port, then auto-increment if in use
-    max_attempts = 10
-    for attempt in range(max_attempts):
-        try_port = port + attempt
-        try:
-            print(f"Starting server on http://localhost:{try_port}")
-            print("Press Ctrl+C to stop")
-            app.run(host="127.0.0.1", port=try_port, debug=False)
-            break
-        except OSError as e:
-            if "Address already in use" in str(e):
-                if attempt < max_attempts - 1:
-                    print(f"Port {try_port} in use, trying {try_port + 1}...")
-                    continue
-                print(f"\nError: Ports {port}-{try_port} all in use.")
-                print("Try a different port with: amplifier-log-viewer --port <PORT>")
-                raise SystemExit(1) from e
-            raise

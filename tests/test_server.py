@@ -3,7 +3,14 @@
 import json
 
 import pytest
+from amplifier_app_log_viewer.auth import AuthConfig
 from amplifier_app_log_viewer.server import create_app
+
+from .conftest import basic_auth_client
+
+_TEST_AUTH = AuthConfig(
+    mode="password", secret="test-secret", ttl_seconds=604800, password="test-pw"
+)
 
 
 class TestBasePath:
@@ -123,8 +130,8 @@ class TestTranscriptRoutes:
     """New /api/transcript/* routes (spec section 7.2)."""
 
     def test_transcript_list_route(self, tmp_root_with_sessions):
-        app = create_app([tmp_root_with_sessions])
-        client = app.test_client()
+        app = create_app([tmp_root_with_sessions], auth=_TEST_AUTH)
+        client = basic_auth_client(app)
 
         response = client.get("/api/transcript/list?session=events-session")
         data = response.get_json()
@@ -135,8 +142,8 @@ class TestTranscriptRoutes:
         assert data["messages"][0]["role"] == "user"
 
     def test_transcript_message_route(self, tmp_root_with_sessions):
-        app = create_app([tmp_root_with_sessions])
-        client = app.test_client()
+        app = create_app([tmp_root_with_sessions], auth=_TEST_AUTH)
+        client = basic_auth_client(app)
 
         list_response = client.get("/api/transcript/list?session=events-session")
         line = list_response.get_json()["messages"][0]["line"]
@@ -149,8 +156,8 @@ class TestTranscriptRoutes:
         assert data["line"] == line
 
     def test_transcript_routes_404_unknown_session(self, tmp_root_with_sessions):
-        app = create_app([tmp_root_with_sessions])
-        client = app.test_client()
+        app = create_app([tmp_root_with_sessions], auth=_TEST_AUTH)
+        client = basic_auth_client(app)
 
         response = client.get("/api/transcript/list?session=does-not-exist")
         assert response.status_code == 404
@@ -163,8 +170,8 @@ class TestEventsCapabilities:
     """/api/events/list must report has_events/has_transcript (spec 7.1)."""
 
     def test_events_list_reports_capabilities(self, tmp_root_with_sessions):
-        app = create_app([tmp_root_with_sessions])
-        client = app.test_client()
+        app = create_app([tmp_root_with_sessions], auth=_TEST_AUTH)
+        client = basic_auth_client(app)
 
         response = client.get("/api/events/list?session=events-session")
         data = response.get_json()
@@ -177,8 +184,8 @@ class TestSessionMetadataRoute:
     """Regression guard for server.py:476 (AttributeError on events_path=None)."""
 
     def test_session_metadata_route_with_no_events(self, tmp_root_with_sessions):
-        app = create_app([tmp_root_with_sessions])
-        client = app.test_client()
+        app = create_app([tmp_root_with_sessions], auth=_TEST_AUTH)
+        client = basic_auth_client(app)
 
         response = client.get("/api/session/transcript-only-session/metadata")
 

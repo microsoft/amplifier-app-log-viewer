@@ -1,5 +1,18 @@
 // Amplifier Log Viewer - Network tab-style interface with progressive loading
 
+// One-shot guard: many in-flight requests can 401 simultaneously; only the
+// first should navigate.
+let _authRedirecting = false;
+
+function handleUnauthorized(response) {
+    if (response.status !== 401) return false;
+    if (_authRedirecting) return true;
+    _authRedirecting = true;
+    const next = encodeURIComponent(location.pathname + location.search);
+    location.href = `${API_BASE}/login?next=${next}`;
+    return true;
+}
+
 class LogViewer {
     constructor(apiBase = "") {
         this.projects = [];
@@ -97,6 +110,16 @@ class LogViewer {
     // URL building helper for app-specific routing
     buildUrl(path) {
         return this.apiBase + path;
+    }
+
+    // fetch() wrapper that redirects to /login on a 401 instead of letting
+    // the caller silently treat it as "no data" -- see handleUnauthorized().
+    async apiFetch(path, options) {
+        const response = await fetch(this.buildUrl(path), options);
+        if (handleUnauthorized(response)) {
+            throw new Error('unauthenticated');
+        }
+        return response;
     }
 
 
@@ -418,7 +441,7 @@ class LogViewer {
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(this.buildUrl(url));
+            const response = await this.apiFetch(url);
             const data = await response.json();
             this.projects = data.projects || [];
 
@@ -458,7 +481,7 @@ class LogViewer {
             let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(this.buildUrl(url));
+            const response = await this.apiFetch(url);
             const data = await response.json();
             this.sessions = data.sessions || [];
 
@@ -543,11 +566,10 @@ class LogViewer {
     }
 
     async fetchEventPage(sessionId, offset, limit) {
-        const url = this.buildUrl(
+        const path =
             `/api/events/list?session=${encodeURIComponent(sessionId)}` +
-            `&offset=${offset}&limit=${limit}`
-        );
-        const response = await fetch(url);
+            `&offset=${offset}&limit=${limit}`;
+        const response = await this.apiFetch(path);
         if (!response.ok) throw new Error(`events/list HTTP ${response.status}`);
         return response.json();
     }
@@ -759,11 +781,10 @@ class LogViewer {
         this.eventStream = setInterval(async () => {
             if (this._pollSessionId !== sessionId) return;
             try {
-                const url = this.buildUrl(
+                const path =
                     `/api/events/since?session=${encodeURIComponent(sessionId)}` +
-                    `&position=${this._pollPosition}&line_count=${this._pollLineCount}`
-                );
-                const response = await fetch(url);
+                    `&position=${this._pollPosition}&line_count=${this._pollLineCount}`;
+                const response = await this.apiFetch(path);
                 if (!response.ok) {
                     this._pollErrorCount++;
                     return;
@@ -849,7 +870,7 @@ class LogViewer {
         this.showLoading(true);
 
         try {
-            const response = await fetch(this.buildUrl(`/api/transcript/list?session=${sessionId}`));
+            const response = await this.apiFetch(`/api/transcript/list?session=${sessionId}`);
             const data = await response.json();
             this.transcriptMessages = data.messages || [];
             this.sessionCaps.has_transcript = data.has_transcript !== false;
@@ -958,8 +979,8 @@ class LogViewer {
         this.showDetailLoading(true);
 
         try {
-            const response = await fetch(
-                this.buildUrl(`/api/transcript/${this.currentSessionId}/${msg.line}?byte_offset=${msg.byte_offset}`)
+            const response = await this.apiFetch(
+                `/api/transcript/${this.currentSessionId}/${msg.line}?byte_offset=${msg.byte_offset}`
             );
             if (!response.ok) {
                 throw new Error('Failed to load message');
@@ -1324,8 +1345,8 @@ class LogViewer {
 
         try {
             // Fetch full event by line number
-            const response = await fetch(
-                this.buildUrl(`/api/events/${this.currentSessionId}/${lineNum}`)
+            const response = await this.apiFetch(
+                `/api/events/${this.currentSessionId}/${lineNum}`
             );
             
             if (!response.ok) {
@@ -1449,7 +1470,7 @@ class LogViewer {
             if (since) params.push(`since=${since}`);
             if (until) params.push(`until=${until}`);
             if (params.length) url += '?' + params.join('&');
-            const response = await fetch(this.buildUrl(url));
+            const response = await this.apiFetch(url);
             const data = await response.json();
             const newProjects = data.projects || [];
 
@@ -1487,7 +1508,7 @@ class LogViewer {
             let url = `/api/sessions?project=${projectSlug}`;
             if (since) url += `&since=${since}`;
             if (until) url += `&until=${until}`;
-            const response = await fetch(this.buildUrl(url));
+            const response = await this.apiFetch(url);
             const data = await response.json();
             const newSessions = data.sessions || [];
 
@@ -1524,7 +1545,7 @@ class LogViewer {
     async refresh() {
         // Force server-side refresh by calling /api/refresh endpoint
         try {
-            const response = await fetch(this.buildUrl('/api/refresh'), { method: 'POST' });
+            const response = await this.apiFetch('/api/refresh', { method: 'POST' });
             if (!response.ok) {
                 console.error('Failed to refresh session tree');
             }
@@ -1637,7 +1658,7 @@ class LogViewer {
 
     async checkScanStatus() {
         try {
-            const response = await fetch(this.buildUrl('/api/status'))
+            const response = await this.apiFetch('/api/status')
             const status = await response.json();
             this.updateScanIndicator(status);
         } catch (error) {

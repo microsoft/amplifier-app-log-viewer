@@ -19,6 +19,9 @@
             <div class="header-top">
                 <h1>Amplifier Log Viewer</h1>
                 <span class="version">Developer Tool</span>
+                <form method="POST" action="{{ BASE_PATH }}/auth/logout" style="margin-left: auto;">
+                    <button type="submit" class="btn-secondary">Sign out</button>
+                </form>
             </div>
             <div class="header-controls">
                 <select id="date-range-selector" class="selector selector-narrow" title="Filter sessions by date">
