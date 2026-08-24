@@ -15,7 +15,12 @@ def temp_events_file(tmp_path):
     # Write 10 test events
     events = []
     for i in range(10):
-        event = {"ts": f"2025-11-10T15:30:{i:02d}.000Z", "lvl": "info", "event": "test:event", "data": {"index": i}}
+        event = {
+            "ts": f"2025-11-10T15:30:{i:02d}.000Z",
+            "lvl": "info",
+            "event": "test:event",
+            "data": {"index": i},
+        }
         events.append(event)
 
     with open(events_file, "w", encoding="utf-8") as f:
@@ -111,3 +116,170 @@ def test_count_lines_missing_file():
     """Test counting lines in non-existent file."""
     count = log_reader.count_lines(Path("/nonexistent/file.jsonl"))
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Field tolerance (old session-root vs context-intelligence event schema)
+# ---------------------------------------------------------------------------
+
+
+def test_event_list_accepts_timestamp_key(tmp_path):
+    """Line with `timestamp` and no `ts` -> `ts` populated."""
+    events_file = tmp_path / "events.jsonl"
+    events_file.write_text(
+        json.dumps({"timestamp": "2025-01-01T00:00:00Z", "event": "e"}) + "\n"
+    )
+
+    result = log_reader.read_event_list(events_file)
+
+    assert result["events"][0]["ts"] == "2025-01-01T00:00:00Z"
+
+
+def test_event_list_defaults_missing_lvl(tmp_path):
+    """No `lvl` -> "INFO"; `session_id` -> None."""
+    events_file = tmp_path / "events.jsonl"
+    events_file.write_text(
+        json.dumps({"timestamp": "2025-01-01T00:00:00Z", "event": "e"}) + "\n"
+    )
+
+    result = log_reader.read_event_list(events_file)
+
+    assert result["events"][0]["lvl"] == "INFO"
+    assert result["events"][0]["session_id"] is None
+
+
+def test_readers_accept_none_path():
+    """read_event_list(None), read_single_event(None, 0), tail_events(None),
+    count_lines(None), read_transcript(None) all return their empty values
+    without raising."""
+    assert log_reader.read_event_list(None)["events"] == []
+    assert log_reader.read_single_event(None, 0) is None
+    assert log_reader.tail_events(None) == ([], 0, 0)
+    assert log_reader.count_lines(None) == 0
+    assert log_reader.read_transcript(None)["messages"] == []
+
+
+# ---------------------------------------------------------------------------
+# read_transcript()
+# ---------------------------------------------------------------------------
+
+
+def test_read_transcript_normalizes_string_content(tmp_path):
+    """`content: "hi"` -> `blocks == [{"type":"text","text":"hi", ...}]`."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    transcript_file.write_text(json.dumps({"role": "user", "content": "hi"}) + "\n")
+
+    result = log_reader.read_transcript(transcript_file)
+
+    assert result["messages"][0]["blocks"] == [
+        {"type": "text", "text": "hi", "truncated": False}
+    ]
+
+
+def test_read_transcript_normalizes_block_list(tmp_path):
+    """thinking + text + tool_call blocks all normalized; tool_calls[].tool
+    read from the "tool" key."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    line = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "pondering"},
+            {"type": "text", "text": "hello"},
+        ],
+        "tool_calls": [{"id": "call-1", "tool": "search", "arguments": {"q": "x"}}],
+    }
+    transcript_file.write_text(json.dumps(line) + "\n")
+
+    result = log_reader.read_transcript(transcript_file)
+    message = result["messages"][0]
+
+    assert message["blocks"][0] == {
+        "type": "thinking",
+        "text": "pondering",
+        "truncated": False,
+    }
+    assert message["blocks"][1] == {
+        "type": "text",
+        "text": "hello",
+        "truncated": False,
+    }
+    assert message["tool_calls"] == [
+        {"id": "call-1", "tool": "search", "preview": json.dumps({"q": "x"})}
+    ]
+
+
+def test_read_transcript_byte_offset_seek_roundtrip(tmp_path):
+    """The byte_offset from read_transcript() feeds read_single_event()'s fast
+    seek path and lands on the exact same message (guards the app.js detail
+    path, which always passes ?byte_offset=)."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    # Varied-length content so byte offsets are distinct per line.
+    lines = [
+        {"role": "user", "content": "short"},
+        {"role": "assistant", "content": "a much longer assistant reply here"},
+        {"role": "user", "content": "third-message-marker"},
+    ]
+    with open(transcript_file, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(m) + "\n" for m in lines)
+
+    listing = log_reader.read_transcript(transcript_file)
+    target = listing["messages"][2]
+    assert target["byte_offset"] > 0  # not line 0 — the seek must actually move
+
+    seeked = log_reader.read_single_event(
+        transcript_file, target["line"], byte_offset=target["byte_offset"]
+    )
+    assert seeked is not None
+    assert seeked["line"] == target["line"]
+    assert seeked["role"] == "user"
+    assert seeked["content"] == "third-message-marker"
+
+
+def test_read_transcript_truncates_long_text(tmp_path):
+    """text > max_text -> cut, truncated is True on both block and message."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    long_text = "x" * 5000
+    transcript_file.write_text(
+        json.dumps({"role": "user", "content": long_text}) + "\n"
+    )
+
+    result = log_reader.read_transcript(transcript_file, max_text=100)
+    message = result["messages"][0]
+
+    assert len(message["blocks"][0]["text"]) == 100
+    assert message["blocks"][0]["truncated"] is True
+    assert message["truncated"] is True
+
+
+def test_read_transcript_pagination(tmp_path):
+    """offset/limit/has_more/total match read_event_list semantics."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    with open(transcript_file, "w", encoding="utf-8") as f:
+        f.writelines(
+            json.dumps({"role": "user", "content": f"msg-{i}"}) + "\n" for i in range(5)
+        )
+
+    result = log_reader.read_transcript(transcript_file, offset=0, limit=2)
+
+    assert len(result["messages"]) == 2
+    assert result["has_more"] is True
+    assert result["total"] == 5
+
+    result2 = log_reader.read_transcript(transcript_file, offset=2, limit=2)
+    assert len(result2["messages"]) == 2
+    assert result2["messages"][0]["line"] == 2
+
+
+def test_read_transcript_skips_malformed_lines(tmp_path):
+    """Malformed lines are skipped exactly as read_event_list skips them."""
+    transcript_file = tmp_path / "transcript.jsonl"
+    with open(transcript_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"role": "user", "content": "ok"}) + "\n")
+        f.write("not valid json\n")
+        f.write(json.dumps({"role": "assistant", "content": "ok2"}) + "\n")
+
+    result = log_reader.read_transcript(transcript_file)
+
+    assert len(result["messages"]) == 2
+    assert result["messages"][0]["role"] == "user"
+    assert result["messages"][1]["role"] == "assistant"

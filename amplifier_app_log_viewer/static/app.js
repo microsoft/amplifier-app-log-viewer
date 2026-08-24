@@ -19,6 +19,32 @@ class LogViewer {
         this.eventCache = new Map();
         this.EVENT_CACHE_MAX = 50;  // Keep last 50 viewed events
 
+        // --- Full-session load ---
+        this.FIRST_PAGE_LIMIT = 200;    // phase 1 — unchanged first-paint cost
+        this.PAGE_LIMIT = 5000;         // phase 2 — server's max (server.py:392)
+        this.AUTO_LOAD_MAX = 20000;     // auto-complete ceiling
+        this.MAX_PAGES = 64;            // hard stop against a pathological loop
+        this._loadToken = 0;            // invalidates in-flight pages when the session changes
+        this.loadComplete = false;      // true when this.events holds the whole session
+        this.eventsTotal = 0;           // server-reported line total for the session
+        this.knownEventTypes = new Set();
+        this._desiredEventType = '';    // persisted type filter, applied once it becomes available
+
+        // --- Windowed render (events view only; transcript is unaffected) ---
+        this.RENDER_CHUNK = 200;        // rows added per window growth step
+        this.SCROLL_EXTEND_PX = 400;    // proximity to an edge that triggers a grow
+        this.PIN_TOLERANCE_PX = 40;     // "user is parked at the bottom"
+        this.renderStart = 0;
+        this.renderEnd = 0;
+        this._extending = false;
+
+        // Transcript view state
+        this.viewMode = 'events';              // 'events' | 'transcript'
+        this.transcriptMessages = [];
+        this.filteredMessages = [];
+        this.selectedMessageIndex = null;
+        this.sessionCaps = { has_events: true, has_transcript: false };
+
         // LocalStorage keys
         this.STORAGE_PREFIX = 'amplifier-log-viewer-';
         
@@ -30,9 +56,9 @@ class LogViewer {
             sortByTimestamp: 'sortByTimestamp',
             activeTab: 'activeTab',
             selectedEventId: 'selectedEventId',
-            eventListScroll: 'eventListScroll',
             detailPanelScroll: 'detailPanelScroll',
             dateRange: 'dateRange',
+            viewMode: 'viewMode',
         };
 
         // DOM elements
@@ -47,6 +73,8 @@ class LogViewer {
         this.filterInput = document.getElementById('filter-input');
         this.levelFilter = document.getElementById('level-filter');
         this.eventTypeFilter = document.getElementById('event-type-filter');
+        this.eventFilters = document.getElementById('event-filters');
+        this.viewToggle = document.getElementById('view-toggle');
         this.clearFiltersBtn = document.getElementById('clear-filters');
         this.filterCount = document.getElementById('filter-count');
         this.eventListContent = document.getElementById('event-list-content');
@@ -57,6 +85,8 @@ class LogViewer {
         this.closeDetailBtn = document.getElementById('close-detail-btn');
         this.scanStatus = document.getElementById('scan-status');
         this.scanText = this.scanStatus?.querySelector('.scan-text');
+        this.jumpLatestBtn = document.getElementById('jump-latest-btn');
+        this.loadBanner = document.getElementById('event-load-banner');
 
         // Status polling
         this.statusPollInterval = null;
@@ -95,6 +125,7 @@ class LogViewer {
         this.restoreFilterState();
         this.restoreSortPreference();
         this.restoreActiveTab();
+        this.restoreViewMode();
 
         // Load projects on startup
         this.loadProjects();
@@ -108,12 +139,8 @@ class LogViewer {
         this.refreshBtn.addEventListener('click', () => this.refresh());
         this.sortByTimestampCheckbox.addEventListener('change', () => this.onSortPreferenceChange());
         
-        // Save scroll positions on scroll (debounced)
-        let scrollTimeout;
-        this.eventListContent.addEventListener('scroll', () => {
-            clearTimeout(scrollTimeout);
-            scrollTimeout = setTimeout(() => this.saveScrollPositions(), 200);
-        });
+        // Windowed-render scroll handler (grows the render window near either edge)
+        this.eventListContent.addEventListener('scroll', () => this.onEventListScroll());
 
         // Refresh when dropdowns are opened (focused)
         this.projectSelector.addEventListener('focus', () => this.refreshProjectList());
@@ -135,6 +162,7 @@ class LogViewer {
             this.applyFilters();
         });
         this.eventTypeFilter.addEventListener('change', () => {
+            this._desiredEventType = this.eventTypeFilter.value;
             this.saveFilterState();
             this.applyFilters();
         });
@@ -154,6 +182,16 @@ class LogViewer {
         this.copyEventBtn.addEventListener('click', () => this.copyCurrentEvent());
         this.copyRawBtn.addEventListener('click', () => this.copyRawJson());
         this.closeDetailBtn.addEventListener('click', () => this.closeDetail());
+
+        // Jump to latest (events view) — pairs with the tail-poll auto-follow-when-pinned behavior
+        if (this.jumpLatestBtn) this.jumpLatestBtn.addEventListener('click', () => this.jumpToLatest());
+
+        // View mode toggle (Events / Transcript)
+        if (this.viewToggle) {
+            this.viewToggle.querySelectorAll('.view-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.setViewMode(btn.dataset.view));
+            });
+        }
     }
 
     saveFilterState() {
@@ -270,18 +308,12 @@ class LogViewer {
         }
     }
 
-    saveScrollPositions() {
-        this.saveToStorage(this.STATE_KEYS.eventListScroll, this.eventListContent.scrollTop);
-    }
-
-    restoreScrollPositions() {
-        const eventListScroll = this.loadFromStorage(this.STATE_KEYS.eventListScroll, 0);
-        if (eventListScroll > 0) {
-            // Use requestAnimationFrame to ensure DOM is ready
-            requestAnimationFrame(() => {
-                this.eventListContent.scrollTop = eventListScroll;
-            });
-        }
+    restoreViewMode() {
+        const savedMode = this.loadFromStorage(this.STATE_KEYS.viewMode, 'events');
+        const mode = savedMode === 'transcript' ? 'transcript' : 'events';
+        // No session loaded yet at this point, so reload is a no-op; this
+        // only syncs the toggle buttons/placeholder to the saved preference.
+        this.setViewMode(mode, { reload: false });
     }
 
     saveSelectedEvent() {
@@ -332,6 +364,7 @@ class LogViewer {
 
         // Select the event if found
         if (foundIndex !== -1) {
+            this.ensureIndexRendered(foundIndex);     // the row must exist before we select/scroll to it
             this.selectEvent(foundIndex);
             // Scroll the selected item into view
             const selectedItem = this.eventListContent.querySelector(`[data-index="${foundIndex}"]`);
@@ -509,6 +542,16 @@ class LogViewer {
         });
     }
 
+    async fetchEventPage(sessionId, offset, limit) {
+        const url = this.buildUrl(
+            `/api/events/list?session=${encodeURIComponent(sessionId)}` +
+            `&offset=${offset}&limit=${limit}`
+        );
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`events/list HTTP ${response.status}`);
+        return response.json();
+    }
+
     async loadEvents(sessionId) {
         if (!sessionId) return;
 
@@ -518,6 +561,7 @@ class LogViewer {
             this.isRestoringState = true;
         }
 
+        const token = ++this._loadToken;   // any in-flight phase-2 page for a prior session is now stale
         this.currentSessionId = sessionId;
         this.showLoading(true);
 
@@ -533,50 +577,174 @@ class LogViewer {
             this.eventStream = null;
         }
 
+        // Reset per-session load + window state
+        this.events = [];
+        this.filteredEvents = [];
+        this.loadComplete = false;
+        this.eventsTotal = 0;
+        this.knownEventTypes = new Set();
+        this.renderStart = 0;
+        this.renderEnd = 0;
+        this.setLoadBanner(null);
+        this._desiredEventType = (this.loadFromStorage('filters', {}).eventType) || '';
+
+        let nextOffset = 0;
+
         try {
-            // Load lightweight event list (no payloads)
-            const response = await fetch(this.buildUrl(`/api/events/list?session=${sessionId}`));
-            const data = await response.json();
+            // Phase 1: fast first page — unchanged first-paint cost, even on huge sessions
+            const data = await this.fetchEventPage(sessionId, 0, this.FIRST_PAGE_LIMIT);
+            if (token !== this._loadToken) return;          // session changed mid-flight
+
             this.events = data.events || [];  // Lightweight event headers
+            this.eventsTotal = data.total || this.events.length;
+            this.loadComplete = !data.has_more;
+            nextOffset = data.offset + data.limit;          // NOT + events.length (blank/malformed lines)
+
+            // Capture capabilities in one round trip so we know whether to
+            // offer/auto-switch to the Transcript view.
+            this.sessionCaps = {
+                has_events: data.has_events !== false,
+                has_transcript: !!data.has_transcript,
+            };
 
             // Capture tail position for polling — starts exactly where this load ended.
-            // No separate init request needed, no gap, no wasted I/O.
+            // Overwritten by the LAST page fetched in phase 2 (closes the 200..EOF gap).
             this._pollPosition = data.tail_position || 0;
             this._pollLineCount = data.tail_line_count || this.events.length;
 
-            // Populate dynamic filters from actual event data
-            this.populateDynamicFilters();
-
-            // Restore event type filter value after dynamic population
-            const savedFilters = this.loadFromStorage('filters', {});
-            if (savedFilters.eventType) {
-                // Check if saved value exists in the dropdown
-                const options = Array.from(this.eventTypeFilter.options);
-                const exists = options.some(opt => opt.value === savedFilters.eventType);
-                if (exists) {
-                    this.eventTypeFilter.value = savedFilters.eventType;
-                } else {
-                    // Reset to default if saved value doesn't exist
-                    this.eventTypeFilter.value = '';
-                }
+            if (!this.sessionCaps.has_events && !this.sessionCaps.has_transcript) {
+                this.events = [];
+                this.filteredEvents = [];
+                this.eventListContent.innerHTML =
+                    '<div class="welcome-message"><p>This session has no events or transcript.</p></div>';
+                this.updateFilterCount();
+                return;
             }
 
-            this.applyFilters();
+            // A session with no events (but a transcript) is useless in Events view,
+            // and Transcript may already be the user's persisted preference —
+            // auto-switch either way rather than showing an empty pane.
+            if (this.sessionCaps.has_transcript &&
+                (!this.sessionCaps.has_events || this.viewMode === 'transcript')) {
+                this.setViewMode('transcript');
+                return;
+            }
 
-            // Start real-time stream
-            this.startEventStream(sessionId);
+            this.populateDynamicFilters();   // now owns saved-filter restoration
+            this.applyFilters();             // window anchored 'top'
         } catch (error) {
             console.error('Failed to load events:', error);
             this.showError('Failed to load events');
+            return;
         } finally {
             this.showLoading(false);
-            
+
             // Restore selected event AFTER loading is complete and DOM is rendered
             // Use requestAnimationFrame to ensure DOM paint is done
             requestAnimationFrame(() => {
                 this.restoreSelectedEvent();
             });
         }
+
+        // ---- Phase 2: complete the session in the background ----
+        if (token !== this._loadToken) return;
+
+        if (this.loadComplete) {
+            this.startEventStream(sessionId);
+            return;
+        }
+        if (this.eventsTotal > this.AUTO_LOAD_MAX) {
+            // Too big to complete implicitly. State it and offer the opt-in.
+            this.setLoadBanner({ sessionId, token, nextOffset });
+            return;
+        }
+        await this.loadRemainingEvents(sessionId, nextOffset, token);
+    }
+
+    async loadRemainingEvents(sessionId, startOffset, token, { unlimited = false } = {}) {
+        let offset = startOffset;
+        let pages = 0;
+
+        this.setLoadBanner(null);
+
+        try {
+            while (pages++ < this.MAX_PAGES) {
+                this.showLoadProgress(this.events.length, this.eventsTotal);
+
+                const data = await this.fetchEventPage(sessionId, offset, this.PAGE_LIMIT);
+                if (token !== this._loadToken) return;      // session changed — drop this page
+
+                const page = data.events || [];
+                if (page.length) this.events.push(...page);
+                this.eventsTotal = data.total || this.eventsTotal;
+
+                // Poll markers always come from the most recent page fetched — this is
+                // what closes the 200..EOF gap left by the phase-1-only load.
+                this._pollPosition = data.tail_position || this._pollPosition;
+                this._pollLineCount = data.tail_line_count || this._pollLineCount;
+
+                offset = data.offset + data.limit;
+
+                if (!data.has_more) { this.loadComplete = true; break; }
+                if (!unlimited && this.events.length >= this.AUTO_LOAD_MAX) break;
+            }
+        } catch (error) {
+            console.error('Failed to complete event load:', error);
+        } finally {
+            this.showLoadProgress(null);
+        }
+
+        if (token !== this._loadToken) return;
+
+        this.populateDynamicFilters();                   // now sees every type in the session
+        this.applyFilters({ window: 'preserve' });       // keep the user where they are
+
+        // The deep-event case: the persisted selection may only now be reachable.
+        if (this.selectedEventIndex === null) {
+            requestAnimationFrame(() => this.restoreSelectedEvent());
+        }
+
+        if (this.loadComplete) {
+            this.setLoadBanner(null);
+            this.startEventStream(sessionId);            // only when whole
+        } else {
+            this.setLoadBanner({ sessionId, token, nextOffset: offset });
+        }
+    }
+
+    showLoadProgress(loaded, total) {
+        const indicator = document.getElementById('loading-indicator');
+        if (loaded === null) { indicator.style.display = 'none'; return; }
+        indicator.textContent = `Loading events… ${loaded.toLocaleString()} of ${(total || 0).toLocaleString()}`;
+        indicator.style.display = 'block';
+    }
+
+    setLoadBanner(state) {
+        if (!this.loadBanner) return;
+        if (!state) {
+            this.loadBanner.style.display = 'none';
+            this.loadBanner.innerHTML = '';
+            return;
+        }
+        const { sessionId, token, nextOffset } = state;
+        this.loadBanner.innerHTML = '';
+
+        const text = document.createElement('span');
+        text.textContent =
+            `Loaded ${this.events.length.toLocaleString()} of ${this.eventsTotal.toLocaleString()} events. ` +
+            `Filters cover loaded events only; live updates paused.`;
+
+        const btn = document.createElement('button');
+        btn.className = 'btn-small';
+        btn.textContent = 'Load all';
+        btn.addEventListener('click', () => {
+            btn.disabled = true;
+            this.loadRemainingEvents(sessionId, nextOffset, token, { unlimited: true });
+        });
+
+        this.loadBanner.appendChild(text);
+        this.loadBanner.appendChild(btn);
+        this.loadBanner.style.display = 'flex';
     }
 
     startEventStream(sessionId) {
@@ -603,11 +771,22 @@ class LogViewer {
                 this._pollErrorCount = 0;
                 const data = await response.json();
                 if (data.events && data.events.length > 0) {
+                    const pinned = this.isPinnedToBottom();     // read BEFORE mutating the DOM
+                    const typesBefore = this.knownEventTypes.size;
+
                     this.events.push(...data.events);
-                    this.applyFilters();
+                    data.events.forEach(e => this.knownEventTypes.add(e.event));
+
+                    if (this.knownEventTypes.size !== typesBefore) {
+                        this.populateDynamicFilters();          // a genuinely new type appeared
+                    }
+
+                    this.applyFilters({ window: pinned ? 'bottom' : 'preserve' });
+                    if (pinned) this.eventListContent.scrollTop = this.eventListContent.scrollHeight;
                 }
                 this._pollPosition = data.position;
                 this._pollLineCount = data.line_count;
+                this.eventsTotal = data.line_count || this.eventsTotal;
             } catch (e) {
                 this._pollErrorCount++;
                 if (this._pollErrorCount >= 5) {
@@ -617,8 +796,261 @@ class LogViewer {
         }, 2000);
     }
 
-    applyFilters() {
+    isPinnedToBottom() {
+        const el = this.eventListContent;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) < this.PIN_TOLERANCE_PX
+            && this.renderEnd >= this.filteredEvents.length;
+    }
+
+    setViewMode(mode, { reload = true } = {}) {
+        this.viewMode = mode === 'transcript' ? 'transcript' : 'events';
+        this.saveToStorage(this.STATE_KEYS.viewMode, this.viewMode);
+
+        if (this.viewToggle) {
+            this.viewToggle.querySelectorAll('.view-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === this.viewMode);
+            });
+        }
+
+        const mainContent = document.querySelector('.main-content');
+        if (mainContent) {
+            mainContent.classList.toggle('transcript-mode', this.viewMode === 'transcript');
+        }
+
+        if (this.eventFilters) {
+            this.eventFilters.style.display = this.viewMode === 'transcript' ? 'none' : '';
+        }
+
+        if (this.filterInput) {
+            this.filterInput.placeholder = this.viewMode === 'transcript'
+                ? 'Search transcript...'
+                : 'Search events...';
+        }
+
+        // Transcript mode never polls; events mode restarts its own poll via loadEvents().
+        if (this.viewMode === 'transcript' && this.eventStream) {
+            clearInterval(this.eventStream);
+            this.eventStream = null;
+        }
+
+        if (!reload || !this.currentSessionId) return;
+
+        if (this.viewMode === 'transcript') {
+            this.loadTranscript(this.currentSessionId);
+        } else {
+            this.loadEvents(this.currentSessionId);
+        }
+    }
+
+    async loadTranscript(sessionId) {
+        if (!sessionId) return;
+
+        this.currentSessionId = sessionId;
+        this.showLoading(true);
+
+        try {
+            const response = await fetch(this.buildUrl(`/api/transcript/list?session=${sessionId}`));
+            const data = await response.json();
+            this.transcriptMessages = data.messages || [];
+            this.sessionCaps.has_transcript = data.has_transcript !== false;
+
+            this.applyFilters();
+        } catch (error) {
+            console.error('Failed to load transcript:', error);
+            this.showError('Failed to load transcript');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    renderTranscript() {
+        if (this.filteredMessages.length === 0) {
+            this.eventListContent.innerHTML = '<div class="welcome-message"><p>No messages match filters</p></div>';
+            return;
+        }
+
+        this.eventListContent.innerHTML = '';
+        this.filteredMessages.forEach((msg, index) => {
+            const item = this.createTranscriptItem(msg, index);
+            this.eventListContent.appendChild(item);
+        });
+    }
+
+    createTranscriptItem(msg, index) {
+        const item = document.createElement('div');
+        item.className = 'transcript-message';
+        item.dataset.index = index;
+        item.dataset.line = msg.line;
+
+        const role = (msg.role || 'unknown').toLowerCase();
+        const roleBadge = document.createElement('span');
+        roleBadge.className = `role-badge ${role}`;
+        roleBadge.textContent = msg.role || 'unknown';
+
+        const content = document.createElement('div');
+        content.className = 'transcript-content';
+
+        (msg.blocks || []).forEach(block => {
+            if (block.type === 'thinking') {
+                const details = document.createElement('details');
+                details.className = 'transcript-thinking';
+                const summary = document.createElement('summary');
+                summary.textContent = 'thinking';
+                details.appendChild(summary);
+                const text = document.createElement('div');
+                text.textContent = block.text || '';
+                details.appendChild(text);
+                content.appendChild(details);
+            } else if (block.type === 'text') {
+                const textEl = document.createElement('div');
+                textEl.className = 'transcript-text';
+                textEl.textContent = block.text || '';
+                content.appendChild(textEl);
+            } else {
+                const summaryEl = document.createElement('div');
+                summaryEl.className = 'transcript-text';
+                summaryEl.textContent = block.summary || block.text || '';
+                content.appendChild(summaryEl);
+            }
+        });
+
+        (msg.tool_calls || []).forEach(call => {
+            const chip = document.createElement('span');
+            chip.className = 'transcript-tool-call';
+            chip.textContent = call.tool || 'tool';
+            chip.title = call.preview || '';
+            content.appendChild(chip);
+        });
+
+        if (msg.truncated) {
+            const expandBtn = document.createElement('button');
+            expandBtn.className = 'transcript-expand-btn';
+            expandBtn.textContent = 'Show full message';
+            expandBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.selectTranscriptMessage(index, { expand: true });
+            });
+            content.appendChild(expandBtn);
+        }
+
+        item.appendChild(roleBadge);
+        item.appendChild(content);
+
+        item.addEventListener('click', () => this.selectTranscriptMessage(index));
+
+        return item;
+    }
+
+    async selectTranscriptMessage(index, opts = {}) {
+        const msg = this.filteredMessages[index];
+        if (!msg) return;
+
+        this.selectedMessageIndex = index;
+        this.highlightSelectedTranscriptItem(index);
+
+        const cacheKey = `t${msg.line}`;
+
+        if (!opts.expand && this.eventCache.has(cacheKey)) {
+            this.renderTranscriptDetail(this.eventCache.get(cacheKey));
+            return;
+        }
+
+        this.showDetailLoading(true);
+
+        try {
+            const response = await fetch(
+                this.buildUrl(`/api/transcript/${this.currentSessionId}/${msg.line}?byte_offset=${msg.byte_offset}`)
+            );
+            if (!response.ok) {
+                throw new Error('Failed to load message');
+            }
+            const fullMessage = await response.json();
+
+            this.cacheEvent(cacheKey, fullMessage);
+
+            this.renderTranscriptDetail(fullMessage);
+        } catch (error) {
+            console.error('Failed to load transcript message:', error);
+            this.showDetailError('Failed to load message details');
+        } finally {
+            this.showDetailLoading(false);
+        }
+    }
+
+    highlightSelectedTranscriptItem(index) {
+        this.eventListContent.querySelectorAll('.transcript-message').forEach(item => {
+            item.classList.remove('selected');
+        });
+        const selectedItem = this.eventListContent.querySelector(`[data-index="${index}"]`);
+        if (selectedItem) {
+            selectedItem.classList.add('selected');
+        }
+    }
+
+    renderTranscriptDetail(msg) {
+        const overviewTab = document.getElementById('overview-tab');
+        const metadata = msg.metadata || {};
+        const blockCount = Array.isArray(msg.content) ? msg.content.length : (msg.content ? 1 : 0);
+        overviewTab.innerHTML = `
+            <div class="overview-grid">
+                <div class="overview-section">
+                    <h4>Message Information</h4>
+                    <table class="detail-table">
+                        <tr><td>Role:</td><td>${msg.role || ''}</td></tr>
+                        <tr><td>Line Number:</td><td>${msg.line}</td></tr>
+                        <tr><td>Blocks:</td><td>${blockCount}</td></tr>
+                        <tr><td>Tool calls:</td><td>${(msg.tool_calls || []).length}</td></tr>
+                    </table>
+                </div>
+                <div class="overview-section">
+                    <h4>Metadata</h4>
+                    <table class="detail-table">
+                        <tr><td>Seq:</td><td>${metadata._seq ?? 'N/A'}</td></tr>
+                        <tr><td>Timestamp:</td><td>${metadata.timestamp || 'N/A'}</td></tr>
+                    </table>
+                </div>
+            </div>
+        `;
+
+        if (window.JSONViewer) {
+            const viewer = new JSONViewer(this.dataViewer, {
+                maxTextLength: 200,
+                smartExpansion: true,
+                forceExpand: false,
+                collapseByDefault: [],
+                expandAllChildren: ['content', 'tool_calls'],
+                autoExpandFields: ['content', 'tool_calls', 'metadata'],
+            });
+            viewer.render(msg);
+        } else {
+            this.dataViewer.innerHTML = '<pre class="json-display">' +
+                JSON.stringify(msg, null, 2) + '</pre>';
+        }
+
+        this.rawJson.textContent = JSON.stringify(msg, null, 2);
+
+        document.getElementById('detail-title').textContent = `Message: ${msg.role || ''}`;
+    }
+
+    applyFilters(opts = {}) {
         const searchText = this.filterInput.value.toLowerCase();
+
+        if (this.viewMode === 'transcript') {
+            this.filteredMessages = this.transcriptMessages.filter(msg => {
+                if (!searchText) return true;
+                const blockText = (msg.blocks || [])
+                    .map(b => b.text || b.summary || '')
+                    .join(' ');
+                const toolText = (msg.tool_calls || []).map(c => c.tool || '').join(' ');
+                const searchable = `${blockText} ${toolText}`.toLowerCase();
+                return searchable.includes(searchText);
+            });
+
+            this.renderTranscript();
+            this.updateFilterCount();
+            return;
+        }
+
         const levelFilter = this.levelFilter.value;
         const typeFilter = this.eventTypeFilter.value;
 
@@ -628,7 +1060,7 @@ class LogViewer {
 
             // Event type filter - support prefix matching
             if (typeFilter) {
-                if (!event.event.startsWith(typeFilter)) return false;
+                if (!(event.event || '').startsWith(typeFilter)) return false;
             }
 
             // Text search (search in event type and preview)
@@ -640,16 +1072,21 @@ class LogViewer {
             return true;
         });
 
-        this.renderEvents();
+        this.renderEvents({ window: opts.window || 'top' });
         this.updateFilterCount();
     }
 
     populateDynamicFilters() {
-        // Populate event type filter from actual events
+        // Populate event type filter from actual events (the FULL loaded set, not a page sample)
         const eventTypes = new Set();
         this.events.forEach(event => {
             eventTypes.add(event.event);
         });
+        this.knownEventTypes = eventTypes;   // used by the tail poll to detect genuinely new types
+
+        // Preserve whatever is currently selected (or the persisted-but-not-yet-available
+        // choice) so a saved filter isn't destroyed just because phase 1 hadn't loaded its type yet.
+        const desired = this.eventTypeFilter.value || this._desiredEventType || '';
 
         const sortedTypes = Array.from(eventTypes).sort();
 
@@ -680,19 +1117,139 @@ class LogViewer {
                 this.eventTypeFilter.appendChild(option);
             });
         });
+
+        // Re-apply the selection if (and only if) it now exists among the options. Never
+        // writes storage here, so a filter the user saved is not destroyed just because
+        // phase 1 hadn't loaded its type yet — it survives until phase 2 completes.
+        const options = Array.from(this.eventTypeFilter.options);
+        this.eventTypeFilter.value = options.some(o => o.value === desired) ? desired : '';
     }
 
-    renderEvents() {
-        if (this.filteredEvents.length === 0) {
-            this.eventListContent.innerHTML = '<div class="welcome-message"><p>No events match filters</p></div>';
+    renderEvents({ window = 'top', anchorIndex = null } = {}) {
+        const total = this.filteredEvents.length;
+
+        if (total === 0) {
+            this.eventListContent.innerHTML =
+                '<div class="welcome-message"><p>No events match filters</p></div>';
+            this.renderStart = 0;
+            this.renderEnd = 0;
             return;
         }
 
+        const chunk = this.RENDER_CHUNK;
+        let start, end;
+
+        if (window === 'bottom') {
+            end = total;
+            start = Math.max(0, total - chunk);
+        } else if (window === 'index' && anchorIndex !== null) {
+            start = Math.max(0, Math.min(anchorIndex - Math.floor(chunk / 2), total - chunk));
+            start = Math.max(0, start);
+            end = Math.min(total, start + chunk);
+        } else if (window === 'preserve' && this.renderEnd > this.renderStart) {
+            start = Math.min(this.renderStart, Math.max(0, total - 1));
+            end = Math.min(total, Math.max(start + chunk, this.renderEnd));
+        } else {                                   // 'top' — the default
+            start = 0;
+            end = Math.min(total, chunk);
+        }
+
+        this.renderStart = start;
+        this.renderEnd = end;
+
         this.eventListContent.innerHTML = '';
-        this.filteredEvents.forEach((event, index) => {
-            const item = this.createEventItem(event, index);
-            this.eventListContent.appendChild(item);
-        });
+        this.eventListContent.appendChild(this.buildEventRange(start, end));
+        this.updateSentinels();
+    }
+
+    buildEventRange(start, end) {
+        const frag = document.createDocumentFragment();
+        for (let i = start; i < end; i++) {
+            frag.appendChild(this.createEventItem(this.filteredEvents[i], i));
+        }
+        return frag;
+    }
+
+    updateSentinels() {
+        const el = this.eventListContent;
+        el.querySelectorAll('.event-sentinel').forEach(n => n.remove());
+
+        if (this.renderStart > 0) {
+            el.insertBefore(this.makeSentinel('top', this.renderStart), el.firstChild);
+        }
+        const below = this.filteredEvents.length - this.renderEnd;
+        if (below > 0) {
+            el.appendChild(this.makeSentinel('bottom', below));
+        }
+    }
+
+    makeSentinel(edge, remaining) {
+        const div = document.createElement('div');
+        div.className = 'event-sentinel';
+        div.dataset.edge = edge;
+        const step = Math.min(this.RENDER_CHUNK, remaining);
+        div.textContent = edge === 'top'
+            ? `▲ Load ${step} older — ${remaining.toLocaleString()} above`
+            : `▼ Load ${step} more — ${remaining.toLocaleString()} below`;
+        div.addEventListener('click',
+            () => edge === 'top' ? this.extendWindowUp() : this.extendWindowDown());
+        return div;
+    }
+
+    extendWindowDown() {
+        const total = this.filteredEvents.length;
+        if (this._extending || this.renderEnd >= total) return;
+        this._extending = true;
+
+        const start = this.renderEnd;
+        const end = Math.min(total, start + this.RENDER_CHUNK);
+        const sentinel = this.eventListContent.querySelector('.event-sentinel[data-edge="bottom"]');
+        this.eventListContent.insertBefore(this.buildEventRange(start, end), sentinel);
+        this.renderEnd = end;
+        this.updateSentinels();
+
+        this._extending = false;
+    }
+
+    extendWindowUp() {
+        if (this._extending || this.renderStart <= 0) return;
+        this._extending = true;
+
+        const el = this.eventListContent;
+        const fromBottom = el.scrollHeight - el.scrollTop;   // capture BEFORE mutating
+
+        const end = this.renderStart;
+        const start = Math.max(0, end - this.RENDER_CHUNK);
+        el.insertBefore(this.buildEventRange(start, end), el.querySelector('.event-item'));
+        this.renderStart = start;
+        this.updateSentinels();
+
+        el.scrollTop = el.scrollHeight - fromBottom;         // keep the viewport steady
+
+        this._extending = false;
+    }
+
+    onEventListScroll() {
+        if (this.viewMode !== 'events' || this._extending) return;
+        const el = this.eventListContent;
+
+        if (el.scrollTop < this.SCROLL_EXTEND_PX && this.renderStart > 0) {
+            this.extendWindowUp();
+        } else if (el.scrollHeight - el.scrollTop - el.clientHeight < this.SCROLL_EXTEND_PX
+                   && this.renderEnd < this.filteredEvents.length) {
+            this.extendWindowDown();
+        }
+    }
+
+    ensureIndexRendered(index) {
+        if (index >= this.renderStart && index < this.renderEnd) return;
+        this.renderEvents({ window: 'index', anchorIndex: index });
+    }
+
+    jumpToLatest() {
+        if (this.viewMode !== 'events' || this.filteredEvents.length === 0) return;
+        this.renderEvents({ window: 'bottom' });
+        this.eventListContent.scrollTop = this.eventListContent.scrollHeight;
     }
 
     createEventItem(event, index) {
@@ -700,11 +1257,12 @@ class LogViewer {
         item.className = 'event-item';
         item.dataset.index = index;
         item.dataset.line = event.line;  // Store line number for fetching
+        if (index === this.selectedEventIndex) item.classList.add('selected');
 
-        const level = event.lvl.toLowerCase();
+        const level = (event.lvl || 'info').toLowerCase();
         const levelBadge = document.createElement('span');
         levelBadge.className = `event-level ${level}`;
-        levelBadge.textContent = event.lvl;
+        levelBadge.textContent = event.lvl || 'INFO';
 
         const content = document.createElement('div');
         content.className = 'event-content';
@@ -715,7 +1273,8 @@ class LogViewer {
 
         const timestampEl = document.createElement('div');
         timestampEl.className = 'event-timestamp';
-        timestampEl.textContent = new Date(event.ts).toLocaleTimeString();
+        const ts = event.ts ? new Date(event.ts) : null;
+        timestampEl.textContent = ts && !isNaN(ts) ? ts.toLocaleTimeString() : '—';
 
         const previewEl = document.createElement('div');
         previewEl.className = 'event-preview';
@@ -816,9 +1375,9 @@ class LogViewer {
                     <h4>Event Information</h4>
                     <table class="detail-table">
                         <tr><td>Event Type:</td><td>${event.event}</td></tr>
-                        <tr><td>Level:</td><td>${event.lvl}</td></tr>
-                        <tr><td>Timestamp:</td><td>${event.ts}</td></tr>
-                        <tr><td>Session ID:</td><td>${event.session_id?.substring(0, 8)}...</td></tr>
+                        <tr><td>Level:</td><td>${event.lvl || 'INFO'}</td></tr>
+                        <tr><td>Timestamp:</td><td>${event.ts || event.timestamp || '—'}</td></tr>
+                        <tr><td>Session ID:</td><td>${event.session_id ? event.session_id.substring(0, 8) + '…' : '—'}</td></tr>
                         <tr><td>Line Number:</td><td>${event.line}</td></tr>
                     </table>
                 </div>
@@ -856,14 +1415,20 @@ class LogViewer {
     }
 
     updateFilterCount() {
-        const total = this.events.length;
-        const filtered = this.filteredEvents.length;
+        const isTranscript = this.viewMode === 'transcript';
+        const total = isTranscript ? this.transcriptMessages.length : this.events.length;
+        const filtered = isTranscript ? this.filteredMessages.length : this.filteredEvents.length;
+        const label = isTranscript ? 'messages' : 'events';
 
-        if (filtered === total) {
-            this.filterCount.textContent = `${total} events`;
-        } else {
-            this.filterCount.textContent = `${filtered} of ${total} events`;
+        let text = (filtered === total)
+            ? `${total.toLocaleString()} ${label}`
+            : `${filtered.toLocaleString()} of ${total.toLocaleString()} ${label}`;
+
+        // Never let the counter imply completeness it doesn't have.
+        if (!isTranscript && !this.loadComplete && this.eventsTotal > total) {
+            text += ` (${total.toLocaleString()} of ${this.eventsTotal.toLocaleString()} loaded)`;
         }
+        this.filterCount.textContent = text;
     }
 
     clearFilters() {
@@ -1010,7 +1575,11 @@ class LogViewer {
     closeDetail() {
         this.selectedEvent = null;
         this.selectedEventIndex = null;
+        this.selectedMessageIndex = null;
         document.querySelectorAll('.event-item').forEach(item => {
+            item.classList.remove('selected');
+        });
+        document.querySelectorAll('.transcript-message').forEach(item => {
             item.classList.remove('selected');
         });
         // Reset to placeholder
@@ -1096,7 +1665,6 @@ class LogViewer {
         // Clear session-specific state when changing projects
         this.saveToStorage(this.STATE_KEYS.lastSession, null);
         this.saveToStorage(this.STATE_KEYS.selectedEventId, null);
-        this.saveToStorage(this.STATE_KEYS.eventListScroll, 0);
 
         if (!projectSlug) {
             this.sessions = [];
@@ -1112,9 +1680,18 @@ class LogViewer {
         
         // Clear event-specific state when changing sessions
         this.saveToStorage(this.STATE_KEYS.selectedEventId, null);
-        this.saveToStorage(this.STATE_KEYS.eventListScroll, 0);
+
+        // Clear transcript-specific state when changing sessions
+        this.selectedMessageIndex = null;
+        this.transcriptMessages = [];
+        this.filteredMessages = [];
 
         if (!sessionId) return;
-        await this.loadEvents(sessionId);
+
+        if (this.viewMode === 'transcript') {
+            await this.loadTranscript(sessionId);
+        } else {
+            await this.loadEvents(sessionId);
+        }
     }
 }

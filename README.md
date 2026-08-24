@@ -29,11 +29,36 @@ amplifier-log-viewer --port 9000
 # Bind to all interfaces (accessible from other machines)
 amplifier-log-viewer --host 0.0.0.0
 
-# Custom projects directory
+# Custom log root (repeatable -- pass --root multiple times to scan several)
+amplifier-log-viewer --root /path/to/projects
+amplifier-log-viewer --root /path/to/projects --root /path/to/other-root
+
+# --projects-dir is accepted as an alias of --root, for back-compat
 amplifier-log-viewer --projects-dir /path/to/projects
 
 # Run at a subpath (for reverse proxy deployments)
 amplifier-log-viewer --base-path /amplifier/logs
+```
+
+**Log roots and defaults**
+
+The viewer scans one or more *log roots* -- directories containing
+`<project-slug>/sessions/<session-id>/` trees. Root resolution (first
+non-empty wins):
+
+1. `--root` (repeatable) / `--projects-dir` (alias) on the command line
+2. `AMPLIFIER_LOG_ROOTS` environment variable -- an `os.pathsep`-separated
+   list of paths (`:` on Linux/macOS, `;` on Windows)
+3. The two built-in defaults, scanned together:
+   - `~/.amplifier/projects` (the historical Amplifier CLI log layout)
+   - `~/.amplifier-agent/state/workspaces` (the newer amplifier-agent layout)
+
+A root that doesn't exist on a given machine is skipped silently -- you'll
+just see the other root's projects, with no error.
+
+```bash
+# Scan only one root, ignoring the other default
+AMPLIFIER_LOG_ROOTS=~/.amplifier-agent/state/workspaces amplifier-log-viewer
 ```
 
 **Running at a Subpath**
@@ -93,8 +118,24 @@ amplifier-log-viewer service uninstall
 - Background operation - no terminal window required
 - Persistent - survives reboots and re-logins
 
+> [!IMPORTANT]
+> **Upgrading from a version installed before multi-root support?** The
+> installed service unit/plist bakes in a fixed list of `--root` arguments at
+> install time. If you installed the service before this version, it only
+> knows about your old single log root and will not see the other one (e.g.
+> the newer `~/.amplifier-agent/state/workspaces` layout) until you reinstall:
+> ```bash
+> amplifier-log-viewer service uninstall
+> amplifier-log-viewer service install
+> ```
+> This also applies any time you want to change which roots the background
+> service scans -- pass `--root` (repeatable) to `service install` to control
+> exactly which roots it picks up.
+
 ## Features
 
+- **Multi-root support** - Scans `~/.amplifier/projects` and `~/.amplifier-agent/state/workspaces` together by default (repeatable `--root` / `AMPLIFIER_LOG_ROOTS` to customize)
+- **Transcript view** - Toggle between Events and Transcript (conversation messages); auto-opens Transcript for sessions with no events
 - **Real-time log streaming** - See events as Amplifier writes them
 - **Auto-refresh** - Automatically detects new projects and sessions (10-second cache)
 - **Flexible session sorting** - Toggle between ID or timestamp order (most recent first)
@@ -118,11 +159,24 @@ amplifier-log-viewer service uninstall
 
 ## Log File Location
 
-Reads from `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`:
+Reads from `<log-root>/<project-slug>/sessions/<session-id>/` under each
+configured log root (see "Log roots and defaults" above) -- by default:
 
-- `events.jsonl` - All lifecycle events
-- `transcript.jsonl` - Conversation messages
-- `metadata.json` - Session metadata
+- `~/.amplifier/projects/<project-slug>/sessions/<session-id>/`
+- `~/.amplifier-agent/state/workspaces/<project-slug>/sessions/<session-id>/`
+
+Within a session directory:
+
+- `events.jsonl` - Lifecycle events, at the session root or (as a fallback,
+  when no root-level file exists) in a `context-intelligence/` subdirectory.
+  When both exist, the session-root file wins -- it carries `lvl`/`session_id`
+  and is never missing lines the nested one has.
+- `transcript.jsonl` - Conversation messages, always at the session root.
+  Rendered in the **Transcript** view (toggle next to the search box) --
+  useful for sessions with no `events.jsonl` at all, which auto-open here.
+- `metadata.json` - Session metadata, merged across the session root and
+  `context-intelligence/metadata.json` when both exist (fields don't
+  collide; the union is used).
 
 ## Auto-Refresh Behavior
 
@@ -138,7 +192,7 @@ The viewer automatically detects new projects and sessions without requiring ser
 **How it works:**
 1. Server maintains 3-second cache of project/session tree
 2. When you **open (focus) a dropdown**, browser fetches fresh data
-3. If server cache >3 seconds old, server rescans `~/.amplifier/projects/` directory
+3. If server cache >3 seconds old, server rescans every configured log root
 4. Browser compares new data with current, only updates if changed
 5. Your current selection is preserved if it still exists
 
@@ -160,7 +214,7 @@ curl -X POST http://localhost:8180/api/refresh
 
 ## Troubleshooting
 
-**"No sessions found"**: Run Amplifier at least once to create session logs at `~/.amplifier/projects/`
+**"No sessions found"**: Run Amplifier (or amplifier-agent) at least once to create session logs at `~/.amplifier/projects/` or `~/.amplifier-agent/state/workspaces/`
 
 **New sessions not appearing**:
 1. **Click to open the session dropdown** (triggers auto-refresh)

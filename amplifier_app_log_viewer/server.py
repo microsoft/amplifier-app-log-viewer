@@ -1,22 +1,14 @@
 """Flask server with REST API and SSE streaming."""
 
-import json
 import threading
 import time
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Blueprint
-from flask import Flask
-from flask import current_app
-from flask import jsonify
-from flask import render_template
-from flask import request
+from flask import Blueprint, Flask, current_app, jsonify, render_template, request
 
-from . import log_reader
-from . import session_scanner
+from . import log_reader, session_scanner
 
 
 def parse_date_filter(since: str | None) -> datetime | None:
@@ -87,7 +79,7 @@ bp = Blueprint("app", __name__)
 
 # Global state
 _session_tree = None
-_projects_dir = None
+_roots: list[Path] = []
 _last_scan_time = 0
 _cache_duration = (
     30  # Seconds before auto-refresh (increased - incremental scans are fast)
@@ -100,14 +92,19 @@ def inject_base_path():
     return {"BASE_PATH": current_app.config.get("APPLICATION_ROOT", "")}
 
 
-def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> Flask:
+def create_app(
+    roots: str | Path | Sequence[str | Path] | None = None, base_path: str = ""
+) -> Flask:
     """Create and configure the Flask application.
 
     This is an app factory function for use with service managers.
 
     Args:
-        projects_dir: Path to Amplifier projects directory.
-                     Defaults to ~/.amplifier/projects
+        roots: One or more log roots to scan. A single string/Path is
+               accepted for back-compat and wrapped into a 1-list.
+               Defaults (via session_scanner.resolve_roots()) to
+               $AMPLIFIER_LOG_ROOTS, or ~/.amplifier/projects and
+               ~/.amplifier-agent/state/workspaces.
         base_path: Base path for serving (e.g., '/amplifier/logs').
                    Defaults to '' (root path).
 
@@ -116,10 +113,12 @@ def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> F
     """
     normalized_base_path = base_path or ""
 
-    if projects_dir is None:
-        projects_dir = Path.home() / ".amplifier" / "projects"
+    if roots is None:
+        root_list: Sequence[str | Path] | None = None
+    elif isinstance(roots, (str, Path)):
+        root_list = [roots]
     else:
-        projects_dir = Path(projects_dir)
+        root_list = list(roots)
 
     # Set base path (always reset global state, even if empty)
     if normalized_base_path:
@@ -145,33 +144,31 @@ def create_app(projects_dir: str | Path | None = None, base_path: str = "") -> F
     app.context_processor(inject_base_path)
     app.register_blueprint(bp, url_prefix=normalized_base_path or None)
 
-    init_session_tree(projects_dir)
+    init_session_tree(root_list)
     _start_background_refresh()
     return app
 
 
-def init_session_tree(projects_dir: Path):
-    """Initialize session tree from projects directory."""
-    global _projects_dir
-    _projects_dir = Path(projects_dir)
+def init_session_tree(roots: Sequence[str | Path] | None):
+    """Initialize session tree from the given roots (or resolved defaults)."""
+    global _roots
+    _roots = session_scanner.resolve_roots(roots)
     refresh_session_tree()
 
 
 def refresh_session_tree():
-    """Refresh session tree by rescanning projects directory (incremental).
+    """Refresh session tree by rescanning all log roots (incremental).
 
     Thread-safe: uses _refresh_lock to prevent concurrent scans and
     protect _session_tree from data races.
     """
     global _session_tree, _last_scan_time
-    if _projects_dir is None:
-        raise RuntimeError("Projects directory not initialized")
+    if not _roots:
+        raise RuntimeError("Log roots not initialized")
 
     with _refresh_lock:
-        amplifier_home = _projects_dir.parent
-
         # Pass existing tree for incremental scanning
-        _session_tree = session_scanner.scan_projects(amplifier_home, _session_tree)
+        _session_tree = session_scanner.scan_roots(_roots, _session_tree)
         _last_scan_time = time.time()
 
         # Log refresh with incremental stats
@@ -179,7 +176,7 @@ def refresh_session_tree():
         project_count = len(_session_tree.projects)
         session_count = len(_session_tree.session_index)
         print(
-            f"[Refresh] {project_count} projects, {session_count} sessions "
+            f"[Refresh] {len(_roots)} roots, {project_count} projects, {session_count} sessions "
             f"(scanned: {scan_state.sessions_scanned}, cached: {scan_state.sessions_cached}, "
             f"took {scan_state.last_scan_duration:.2f}s)"
         )
@@ -237,6 +234,7 @@ def get_status():
             "session_count": len(_session_tree.session_index) if _session_tree else 0,
             "cache_age": time.time() - _last_scan_time if _last_scan_time else 0,
             "cache_duration": _cache_duration,
+            "roots": [str(r) for r in _roots],
         }
     )
 
@@ -281,6 +279,7 @@ def get_projects():
                 {
                     "slug": project.slug,
                     "path": str(project.path),
+                    "sources": project.sources,
                     "session_count": session_count,
                 }
             )
@@ -353,6 +352,10 @@ def get_sessions():
             "children": [child.id for child in session.children],
             "name": session.name,
             "description": session.description,
+            "source": session.source,
+            "timestamp_source": session.timestamp_source,
+            "has_events": session.events_path is not None,
+            "has_transcript": session.transcript_path is not None,
         }
         for session in project.sessions
         if session_in_date_range(session, start_date, end_date)
@@ -397,6 +400,8 @@ def get_event_list():
         return jsonify({"error": "Session not found"}), 404
 
     result = log_reader.read_event_list(session.events_path, offset, limit)
+    result["has_events"] = session.events_path is not None
+    result["has_transcript"] = session.transcript_path is not None
 
     return jsonify(result)
 
@@ -471,24 +476,87 @@ def get_session_metadata(session_id: str):
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    # Read context from metadata file on demand (not stored in memory)
-    context = {}
-    metadata_path = session.events_path.parent / "metadata.json"
-    if metadata_path.exists():
-        try:
-            with open(metadata_path, encoding="utf-8") as f:
-                context = json.load(f).get("context", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+    # Read metadata on demand (not stored in memory), via the same merge the
+    # scanner used to build the session -- keeps this endpoint and the tree
+    # in agreement, and tolerates events_path being None (server.py:476 used
+    # to raise AttributeError here for events-less sessions).
+    raw = session_scanner.load_session_metadata(
+        [session.metadata_path] if session.metadata_path else []
+    )
 
     return jsonify(
         {
             "session_id": session.id,
             "timestamp": session.timestamp,
+            "timestamp_source": session.timestamp_source,
             "parent_session_id": session.parent_id,
-            "context": context,
+            "source": session.source,
+            "context": raw.get("context", {}),  # preserved for backward compat
+            "metadata": raw,  # full merged metadata
         }
     )
+
+
+@bp.route("/api/transcript/list")
+def get_transcript_list():
+    """Paginated transcript messages for a session.
+
+    Query params: session (required), offset (default 0), limit (default 50, max 500)
+    Validation mirrors /api/events/list exactly: 400 on bad params, 400 on missing
+    session, 500 when the tree is uninitialized, 404 on unknown session.
+    Adds "has_transcript" to the response.
+    """
+    session_id = request.args.get("session")
+    if not session_id:
+        return jsonify({"error": "Missing 'session' parameter"}), 400
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = request.args.get("limit", 50, type=int)
+
+    if offset < 0 or limit < 1 or limit > 500:
+        return jsonify({"error": "Invalid offset or limit"}), 400
+
+    if not _session_tree:
+        return jsonify({"error": "Session tree not initialized"}), 500
+
+    session = session_scanner.get_session(session_id, _session_tree)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    result = log_reader.read_transcript(session.transcript_path, offset, limit)
+    result["has_transcript"] = session.transcript_path is not None
+
+    response = jsonify(result)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@bp.route("/api/transcript/<session_id>/<int:line_num>")
+def get_transcript_message(session_id: str, line_num: int):
+    """Full untruncated transcript message by line number.
+
+    Accepts optional ?byte_offset= for O(1) seek, exactly like
+    /api/events/<session_id>/<line_num>. Delegates to
+    log_reader.read_single_event(session.transcript_path, line_num, byte_offset).
+    404 when the session or line is absent.
+    """
+    if not _session_tree:
+        return jsonify({"error": "Session tree not initialized"}), 500
+
+    session = session_scanner.get_session(session_id, _session_tree)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    byte_offset = request.args.get("byte_offset", None, type=int)
+    message = log_reader.read_single_event(
+        session.transcript_path, line_num, byte_offset
+    )
+    if not message:
+        return jsonify({"error": "Message not found"}), 404
+
+    response = jsonify(message)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @bp.route("/api/events/since")
@@ -531,22 +599,27 @@ def get_events_since():
     )
 
 
-def run_server(projects_dir: Path, port: int = 8180):
+def run_server(roots: Sequence[Path], port: int = 8180):
     """
     Start Flask server with automatic port selection if requested port is in use.
 
     Args:
-        projects_dir: Path to ~/.amplifier/projects directory
+        roots: Log roots to scan (see session_scanner.resolve_roots())
         port: Port to run server on (will try next ports if in use)
     """
-    print(f"Initializing session tree from {projects_dir}")
-    app = create_app(projects_dir)
+    print(f"Initializing session tree from {len(roots)} root(s):")
+    for r in roots:
+        print(f"  - {r}")
+    app = create_app(roots)
 
     # Show helpful message if no projects found
     if not _session_tree or not _session_tree.projects:
         print("\nNo Amplifier projects found yet.")
         print("   Run Amplifier at least once to create session logs.")
-        print(f"   Logs will appear in: {projects_dir}\n")
+        print("   Logs will appear in:")
+        for r in roots:
+            print(f"     {r}")
+        print()
 
     # Try requested port, then auto-increment if in use
     max_attempts = 10

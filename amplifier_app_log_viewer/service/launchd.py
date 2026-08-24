@@ -63,9 +63,9 @@ class LaunchdServiceManager(ServiceManager):
             str(self.port),
             "--host",
             self.host,
-            "--projects-dir",
-            str(self.projects_dir),
         ]
+        for root in self.roots:
+            program_arguments.extend(["--root", str(root)])
 
         # Add base-path if specified
         if self.base_path:
