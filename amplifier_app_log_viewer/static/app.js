@@ -13,6 +13,44 @@ function handleUnauthorized(response) {
     return true;
 }
 
+function renderOverviewSections(container, sections) {
+    const grid = document.createElement('div');
+    grid.className = 'overview-grid';
+
+    sections.forEach(({ title, rows }) => {
+        const section = document.createElement('div');
+        section.className = 'overview-section';
+
+        const heading = document.createElement('h4');
+        heading.textContent = title;
+        section.appendChild(heading);
+
+        const table = document.createElement('table');
+        table.className = 'detail-table';
+        rows.forEach(([label, value]) => {
+            const row = document.createElement('tr');
+            const labelCell = document.createElement('td');
+            const valueCell = document.createElement('td');
+            labelCell.textContent = label;
+            valueCell.textContent = String(value);
+            row.appendChild(labelCell);
+            row.appendChild(valueCell);
+            table.appendChild(row);
+        });
+        section.appendChild(table);
+        grid.appendChild(section);
+    });
+
+    container.replaceChildren(grid);
+}
+
+function renderJsonFallback(container, data) {
+    const pre = document.createElement('pre');
+    pre.className = 'json-display';
+    pre.textContent = JSON.stringify(data, null, 2);
+    container.replaceChildren(pre);
+}
+
 class LogViewer {
     constructor(apiBase = "") {
         this.projects = [];
@@ -1012,26 +1050,24 @@ class LogViewer {
         const overviewTab = document.getElementById('overview-tab');
         const metadata = msg.metadata || {};
         const blockCount = Array.isArray(msg.content) ? msg.content.length : (msg.content ? 1 : 0);
-        overviewTab.innerHTML = `
-            <div class="overview-grid">
-                <div class="overview-section">
-                    <h4>Message Information</h4>
-                    <table class="detail-table">
-                        <tr><td>Role:</td><td>${msg.role || ''}</td></tr>
-                        <tr><td>Line Number:</td><td>${msg.line}</td></tr>
-                        <tr><td>Blocks:</td><td>${blockCount}</td></tr>
-                        <tr><td>Tool calls:</td><td>${(msg.tool_calls || []).length}</td></tr>
-                    </table>
-                </div>
-                <div class="overview-section">
-                    <h4>Metadata</h4>
-                    <table class="detail-table">
-                        <tr><td>Seq:</td><td>${metadata._seq ?? 'N/A'}</td></tr>
-                        <tr><td>Timestamp:</td><td>${metadata.timestamp || 'N/A'}</td></tr>
-                    </table>
-                </div>
-            </div>
-        `;
+        renderOverviewSections(overviewTab, [
+            {
+                title: 'Message Information',
+                rows: [
+                    ['Role:', msg.role || ''],
+                    ['Line Number:', msg.line],
+                    ['Blocks:', blockCount],
+                    ['Tool calls:', (msg.tool_calls || []).length],
+                ],
+            },
+            {
+                title: 'Metadata',
+                rows: [
+                    ['Seq:', metadata._seq ?? 'N/A'],
+                    ['Timestamp:', metadata.timestamp || 'N/A'],
+                ],
+            },
+        ]);
 
         if (window.JSONViewer) {
             const viewer = new JSONViewer(this.dataViewer, {
@@ -1044,8 +1080,7 @@ class LogViewer {
             });
             viewer.render(msg);
         } else {
-            this.dataViewer.innerHTML = '<pre class="json-display">' +
-                JSON.stringify(msg, null, 2) + '</pre>';
+            renderJsonFallback(this.dataViewer, msg);
         }
 
         this.rawJson.textContent = JSON.stringify(msg, null, 2);
@@ -1392,27 +1427,25 @@ class LogViewer {
     renderEventDetail(event) {
         // Overview tab
         const overviewTab = document.getElementById('overview-tab');
-        overviewTab.innerHTML = `
-            <div class="overview-grid">
-                <div class="overview-section">
-                    <h4>Event Information</h4>
-                    <table class="detail-table">
-                        <tr><td>Event Type:</td><td>${event.event}</td></tr>
-                        <tr><td>Level:</td><td>${event.lvl || 'INFO'}</td></tr>
-                        <tr><td>Timestamp:</td><td>${event.ts || event.timestamp || '—'}</td></tr>
-                        <tr><td>Session ID:</td><td>${event.session_id ? event.session_id.substring(0, 8) + '…' : '—'}</td></tr>
-                        <tr><td>Line Number:</td><td>${event.line}</td></tr>
-                    </table>
-                </div>
-                <div class="overview-section">
-                    <h4>Schema</h4>
-                    <table class="detail-table">
-                        <tr><td>Name:</td><td>${event.schema?.name || 'N/A'}</td></tr>
-                        <tr><td>Version:</td><td>${event.schema?.ver || 'N/A'}</td></tr>
-                    </table>
-                </div>
-            </div>
-        `;
+        renderOverviewSections(overviewTab, [
+            {
+                title: 'Event Information',
+                rows: [
+                    ['Event Type:', event.event],
+                    ['Level:', event.lvl || 'INFO'],
+                    ['Timestamp:', event.ts || event.timestamp || '—'],
+                    ['Session ID:', event.session_id ? event.session_id.substring(0, 8) + '…' : '—'],
+                    ['Line Number:', event.line],
+                ],
+            },
+            {
+                title: 'Schema',
+                rows: [
+                    ['Name:', event.schema?.name || 'N/A'],
+                    ['Version:', event.schema?.ver || 'N/A'],
+                ],
+            },
+        ]);
 
         // Data tab with JSONViewer - auto-expand data and first level
         if (window.JSONViewer && event.data) {
@@ -1426,8 +1459,7 @@ class LogViewer {
             });
             viewer.render(event.data);
         } else {
-            this.dataViewer.innerHTML = '<pre class="json-display">' +
-                JSON.stringify(event.data, null, 2) + '</pre>';
+            renderJsonFallback(this.dataViewer, event.data);
         }
 
         // Raw JSON tab
